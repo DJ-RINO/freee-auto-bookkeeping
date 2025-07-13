@@ -1,0 +1,30 @@
+# 環境変数
+.env
+.env.local
+
+# 学習データ
+learning_data/*.json
+results_*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
