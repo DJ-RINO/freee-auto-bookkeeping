@@ -101,7 +101,13 @@ class FreeeTokenManager:
         if response.status_code == 401:
             # トークンが無効なのでリフレッシュ
             print("🔄 アクセストークンの有効期限が切れています。更新します...")
-            return self.refresh_token(refresh_token)
+            new_tokens = self.refresh_token(refresh_token)
+            
+            # 新しいトークンをローカルに保存（バックアップ）
+            if new_tokens:
+                self.save_tokens_locally(new_tokens)
+            
+            return new_tokens
         elif response.status_code == 200:
             print("✅ 現在のアクセストークンは有効です")
             return None
