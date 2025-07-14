@@ -404,8 +404,17 @@ def main():
     print("=== freee自動仕訳処理を開始します ===")
     print(f"実行時刻: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
-    # 環境変数の読み込み
-    freee_access_token = os.getenv("FREEE_ACCESS_TOKEN")
+    # トークンの自動更新を試みる
+    try:
+        from token_manager import integrate_with_main
+        freee_access_token = integrate_with_main()
+        print("トークン管理システムを使用しています")
+    except Exception as e:
+        print(f"トークン自動更新をスキップ: {e}")
+        # フォールバック：環境変数から直接取得
+        freee_access_token = os.getenv("FREEE_ACCESS_TOKEN")
+    
+    # その他の環境変数の読み込み
     freee_company_id = int(os.getenv("FREEE_COMPANY_ID", "0"))
     claude_api_key = os.getenv("CLAUDE_API_KEY")
     slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")

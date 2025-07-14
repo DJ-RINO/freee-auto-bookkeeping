@@ -43,11 +43,17 @@ jobs:
     - name: Run bookkeeping process
       env:
         FREEE_ACCESS_TOKEN: ${{ secrets.FREEE_ACCESS_TOKEN }}
+        FREEE_REFRESH_TOKEN: ${{ secrets.FREEE_REFRESH_TOKEN }}
+        FREEE_CLIENT_ID: ${{ secrets.FREEE_CLIENT_ID }}
+        FREEE_CLIENT_SECRET: ${{ secrets.FREEE_CLIENT_SECRET }}
         FREEE_COMPANY_ID: ${{ secrets.FREEE_COMPANY_ID }}
         CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
         DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
       run: |
+        pip install pynacl  # トークン暗号化用
         python src/main.py
     
     - name: Upload results
