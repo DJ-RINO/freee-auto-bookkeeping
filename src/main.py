@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-CONFIDENCE_THRESHOLD = 1.0  # 100%の確信度のみ自動登録
+CONFIDENCE_THRESHOLD = 0.9  # 90%以上で自動登録
 
 class FreeeClient:
     """freee API クライアント"""
@@ -329,13 +329,12 @@ def process_wallet_txn(txn: Dict, freee_client: FreeeClient,
                       claude_client: ClaudeClient, 
                       slack_notifier: Optional[SlackNotifier]) -> Dict:
     """個別の取引を処理"""
-    
     try:
         # Claude APIで分析
         print(f"  分析中: {txn.get('description', '')}")
         analysis = claude_client.analyze_transaction(txn)
         print(f"  分析結果: 信頼度={analysis['confidence']:.2f}")
-        
+
         # DRY_RUNモードのチェック
         if os.getenv("DRY_RUN", "false").lower() == "true":
             print(f"  [DRY_RUN] 登録をスキップします")
@@ -344,11 +343,10 @@ def process_wallet_txn(txn: Dict, freee_client: FreeeClient,
                 "status": "dry_run",
                 "analysis": analysis
             }
-        
-        # 信頼度による処理分岐（100%のみ自動登録）
+
+        # 90%以上は自動登録
         if analysis["confidence"] >= CONFIDENCE_THRESHOLD:
-            # 完全に確実な場合のみ自動登録
-            print(f"  信頼度100%のため自動登録を実行中...")
+            print(f"  信頼度90%以上のため自動登録を実行中...")
             result = freee_client.create_deal(
                 wallet_txn_id=txn["id"],
                 account_item_id=analysis["account_item_id"],
@@ -365,16 +363,17 @@ def process_wallet_txn(txn: Dict, freee_client: FreeeClient,
                 "analysis": analysis
             }
         else:
-            # 100%未満は全て確認対象
-            print(f"  確認が必要です（信頼度: {analysis['confidence']:.2f}）")
+            # 90%未満は全てSlack通知
+            print(f"  信頼度90%未満のためSlack通知を送信します（信頼度: {analysis['confidence']:.2f}）")
             if slack_notifier:
-                slack_notifier.send_confirmation(txn, analysis)
+                sent = slack_notifier.send_confirmation(txn, analysis)
+                print(f"  Slack通知送信結果: {sent}")
             return {
                 "txn_id": txn["id"],
                 "status": "needs_confirmation",
                 "analysis": analysis
             }
-    
+
     except Exception as e:
         print(f"  エラー: {str(e)}")
         return {
