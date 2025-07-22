@@ -180,3 +180,11 @@ freee-auto-bookkeeping/
 ## ライセンス
 
 MIT License
+
+## Claude Code Action (CCA) 対応
+
+このリポジトリはClaude Code Actionに対応しており、以下の機能が利用できます：
+
+- プルリクエスト時の自動コードレビュー
+- freee API統合部分の品質チェック
+- セキュリティ観点でのコード検証
