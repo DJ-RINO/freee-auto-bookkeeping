@@ -225,6 +225,10 @@ class SlackNotifier:
     def send_confirmation(self, txn: Dict, analysis: Dict) -> bool:
         """確認が必要な取引をSlackに通知"""
         
+        if not self.webhook_url:
+            print("  警告: SLACK_WEBHOOK_URLが設定されていません")
+            return False
+        
         message = {
             "text": "仕訳の確認が必要です",
             "blocks": [
@@ -272,8 +276,14 @@ class SlackNotifier:
             ]
         }
         
-        response = requests.post(self.webhook_url, json=message)
-        return response.status_code == 200
+        try:
+            response = requests.post(self.webhook_url, json=message)
+            if response.status_code != 200:
+                print(f"  Slackエラー: HTTP {response.status_code} - {response.text}")
+            return response.status_code == 200
+        except Exception as e:
+            print(f"  Slack送信エラー: {e}")
+            return False
     
     def send_summary(self, results: List[Dict]) -> bool:
         """処理結果のサマリーを送信"""
@@ -321,8 +331,14 @@ class SlackNotifier:
                 }
             })
         
-        response = requests.post(self.webhook_url, json=message)
-        return response.status_code == 200
+        try:
+            response = requests.post(self.webhook_url, json=message)
+            if response.status_code != 200:
+                print(f"Slackサマリー送信エラー: HTTP {response.status_code} - {response.text}")
+            return response.status_code == 200
+        except Exception as e:
+            print(f"Slackサマリー送信エラー: {e}")
+            return False
 
 
 def process_wallet_txn(txn: Dict, freee_client: FreeeClient, 
