@@ -52,7 +52,7 @@ jobs:
         FREEE_CLIENT_ID: ${{ secrets.FREEE_CLIENT_ID }}
         FREEE_CLIENT_SECRET: ${{ secrets.FREEE_CLIENT_SECRET }}
         FREEE_COMPANY_ID: ${{ secrets.FREEE_COMPANY_ID }}
-        CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
+        ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         GITHUB_TOKEN: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
         GITHUB_REPOSITORY: ${{ github.repository }}

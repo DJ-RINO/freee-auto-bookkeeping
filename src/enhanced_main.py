@@ -285,8 +285,15 @@ def enhanced_main():
     # 環境変数の読み込み
     freee_access_token = os.getenv("FREEE_ACCESS_TOKEN")
     freee_company_id = int(os.getenv("FREEE_COMPANY_ID", "0"))
-    claude_api_key = os.getenv("CLAUDE_API_KEY")
+    claude_api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY")
     slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")
+    
+    # APIキー名のデバッグ情報
+    if claude_api_key:
+        if os.getenv("ANTHROPIC_API_KEY"):
+            print("✅ ANTHROPIC_API_KEYを使用してClaude APIにアクセスします")
+        else:
+            print("⚠️  CLAUDE_API_KEYを使用してClaude APIにアクセスします")
     
     # クライアントの初期化
     freee_client = FreeeClient(freee_access_token, freee_company_id)
