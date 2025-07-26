@@ -415,13 +415,18 @@ def main():
     
     # その他の環境変数の読み込み
     freee_company_id = int(os.getenv("FREEE_COMPANY_ID", "0"))
-    claude_api_key = os.getenv("CLAUDE_API_KEY")
+    # Claude APIキーは両方のキー名をサポート
+    claude_api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY")
     slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")
+    
+    # TRANSACTION_LIMIT環境変数のサポート
+    transaction_limit = int(os.getenv("TRANSACTION_LIMIT", "100"))
     
     # 必須パラメータのチェック
     if not freee_access_token or not freee_company_id or not claude_api_key:
         print("エラー: 必須の環境変数が設定されていません")
-        print("FREEE_ACCESS_TOKEN, FREEE_COMPANY_ID, CLAUDE_API_KEY を確認してください")
+        print("FREEE_ACCESS_TOKEN, FREEE_COMPANY_ID, ANTHROPIC_API_KEY (or CLAUDE_API_KEY) を確認してください")
+        print(f"Debug: freee_access_token={bool(freee_access_token)}, freee_company_id={freee_company_id}, claude_api_key={bool(claude_api_key)}")
         return []
     
     # DRY_RUNモードの表示
@@ -436,8 +441,8 @@ def main():
     try:
         # 未仕訳明細の取得
         print("\n未仕訳明細を取得中...")
-        wallet_txns = freee_client.get_unmatched_wallet_txns()
-        print(f"{len(wallet_txns)}件の未仕訳明細を取得しました")
+        wallet_txns = freee_client.get_unmatched_wallet_txns(limit=transaction_limit)
+        print(f"{len(wallet_txns)}件の未仕訳明細を取得しました（制限: {transaction_limit}件）")
         
         if not wallet_txns:
             print("処理対象の明細はありません")
@@ -454,10 +459,15 @@ def main():
         # 結果の保存
         save_results(results)
         
-        # サマリーの送信
-        if slack_notifier and not os.getenv("DRY_RUN", "false").lower() == "true":
+        # サマリーの送信（DRY_RUNモードでも結果サマリーは送信）
+        if slack_notifier:
             print("\nSlackに結果を送信中...")
-            slack_notifier.send_summary(results)
+            try:
+                sent = slack_notifier.send_summary(results)
+                print(f"Slack通知送信結果: {sent}")
+            except Exception as e:
+                print(f"Slack通知送信エラー: {e}")
+                print(f"Webhook URL: {slack_webhook_url[:50]}..." if slack_webhook_url else "Webhook URL: Not set")
         
         # 結果の出力
         registered = len([r for r in results if r["status"] == "registered"])
