@@ -6,12 +6,23 @@ from typing import Dict, List, Optional
 from collections import defaultdict
 from dotenv import load_dotenv
 
+# 他のモジュールをインポート
+try:
+    from learning_system import TransactionLearningSystem
+except ImportError:
+    TransactionLearningSystem = None
+
+try:
+    from data_importer import FreeeDataImporter
+except ImportError:
+    FreeeDataImporter = None
+
 load_dotenv()
 
-CONFIDENCE_THRESHOLD = 1.0  # 100%の確信度のみ自動登録
+CONFIDENCE_THRESHOLD = 0.9  # 90%以上で自動登録（元の設定に戻す）
 
-class FreeeClient:
-    """freee API クライアント（過去の取引履歴取得機能付き）"""
+class IntegratedFreeeClient:
+    """統合版freee API クライアント（全機能搭載）"""
     
     def __init__(self, access_token: str, company_id: int):
         self.access_token = access_token
@@ -21,6 +32,19 @@ class FreeeClient:
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json"
         }
+    
+    def get_unmatched_wallet_txns(self, limit: int = 100) -> List[Dict]:
+        """未仕訳の入出金明細を取得"""
+        url = f"{self.base_url}/wallet_txns"
+        params = {
+            "company_id": self.company_id,
+            "status": "unmatched",
+            "limit": limit
+        }
+        
+        response = requests.get(url, headers=self.headers, params=params)
+        response.raise_for_status()
+        return response.json().get("wallet_txns", [])
     
     def get_historical_deals(self, days: int = 365, limit: int = 100) -> List[Dict]:
         """過去の仕訳済み取引を取得"""
@@ -66,57 +90,6 @@ class FreeeClient:
         for code in response.json().get("taxes", []):
             codes[code["code"]] = code["name_ja"]
         return codes
-    
-    def analyze_historical_patterns(self, description: str, amount: int) -> List[Dict]:
-        """類似する過去の取引パターンを分析"""
-        historical_deals = self.get_historical_deals(days=365, limit=500)
-        
-        similar_deals = []
-        for deal in historical_deals:
-            # 取引詳細を確認
-            if deal.get("details"):
-                for detail in deal["details"]:
-                    # 金額の類似性をチェック
-                    detail_amount = detail.get("amount", 0)
-                    if abs(detail_amount - abs(amount)) / max(abs(amount), 1) < 0.2:  # 20%以内の差
-                        similar_deals.append({
-                            "date": deal.get("issue_date"),
-                            "amount": detail_amount,
-                            "description": deal.get("ref_number", ""),
-                            "account_item_id": detail.get("account_item_id"),
-                            "tax_code": detail.get("tax_code"),
-                            "partner_name": self._get_partner_name(deal.get("partner_id"))
-                        })
-        
-        return similar_deals[:10]  # 上位10件を返す
-    
-    def _get_partner_name(self, partner_id: Optional[int]) -> str:
-        """取引先IDから名称を取得"""
-        if not partner_id:
-            return ""
-        
-        url = f"{self.base_url}/partners/{partner_id}"
-        params = {"company_id": self.company_id}
-        
-        try:
-            response = requests.get(url, headers=self.headers, params=params)
-            response.raise_for_status()
-            return response.json().get("partner", {}).get("name", "")
-        except:
-            return ""
-    
-    def get_unmatched_wallet_txns(self, limit: int = 100) -> List[Dict]:
-        """未仕訳の入出金明細を取得"""
-        url = f"{self.base_url}/wallet_txns"
-        params = {
-            "company_id": self.company_id,
-            "status": "unmatched",
-            "limit": limit
-        }
-        
-        response = requests.get(url, headers=self.headers, params=params)
-        response.raise_for_status()
-        return response.json().get("wallet_txns", [])
     
     def create_deal(self, wallet_txn_id: int, account_item_id: int, 
                    tax_code: int, partner_name: str, amount: int = None,
@@ -220,16 +193,45 @@ class FreeeClient:
             # 類似取引を検索
             duplicates = []
             for deal in deals:
+                # 取引の摘要や金額をチェック
+                deal_description = deal.get("ref_number", "")
                 for detail in deal.get("details", []):
                     # 金額と摘要の類似性をチェック
                     if (abs(detail.get("amount", 0) - abs(amount)) < 100 and
-                        description.lower() in deal.get("ref_number", "").lower()):
+                        self._is_similar_description(description, deal_description)):
                         duplicates.append(deal)
                         break
             
             return duplicates
         except:
             return []
+    
+    def _is_similar_description(self, desc1: str, desc2: str) -> bool:
+        """摘要の類似性をチェック"""
+        if not desc1 or not desc2:
+            return False
+        
+        desc1_lower = desc1.lower().strip()
+        desc2_lower = desc2.lower().strip()
+        
+        # 完全一致
+        if desc1_lower == desc2_lower:
+            return True
+        
+        # 一方が他方を含む
+        if desc1_lower in desc2_lower or desc2_lower in desc1_lower:
+            return True
+        
+        # 単語レベルでの類似性チェック
+        words1 = set(desc1_lower.split())
+        words2 = set(desc2_lower.split())
+        
+        if words1 and words2:
+            # Jaccard係数が0.5以上
+            jaccard = len(words1 & words2) / len(words1 | words2)
+            return jaccard >= 0.5
+        
+        return False
 
     def clear_related_invoice_transactions(self, partner_name: str, amount: int) -> List[Dict]:
         """関連する請求書取引を消し込み"""
@@ -250,7 +252,8 @@ class FreeeClient:
             # 該当する請求書を特定
             matching_invoices = []
             for deal in deals:
-                if (deal.get("partner_name") == partner_name and
+                # 取引先名と金額の一致をチェック
+                if (self._get_partner_name(deal.get("partner_id")) == partner_name and
                     abs(deal.get("amount", 0) - abs(amount)) < 100):
                     matching_invoices.append(deal)
             
@@ -279,13 +282,30 @@ class FreeeClient:
             return cleared_invoices
         except:
             return []
-
-
-class ClaudeClient:
-    """Claude API クライアント"""
     
-    def __init__(self, api_key: str):
+    def _get_partner_name(self, partner_id: Optional[int]) -> str:
+        """取引先IDから名称を取得"""
+        if not partner_id:
+            return ""
+        
+        url = f"{self.base_url}/partners/{partner_id}"
+        params = {"company_id": self.company_id}
+        
+        try:
+            response = requests.get(url, headers=self.headers, params=params)
+            response.raise_for_status()
+            return response.json().get("partner", {}).get("name", "")
+        except:
+            return ""
+
+
+class IntegratedClaudeClient:
+    """統合版Claude APIクライアント（学習システム統合）"""
+    
+    def __init__(self, api_key: str, freee_client: IntegratedFreeeClient, learning_system: Optional[TransactionLearningSystem] = None):
         self.api_key = api_key
+        self.freee_client = freee_client
+        self.learning_system = learning_system
         self.base_url = "https://api.anthropic.com/v1/messages"
         self.headers = {
             "x-api-key": api_key,
@@ -293,214 +313,6 @@ class ClaudeClient:
             "content-type": "application/json"
         }
         
-        # Few-shot examples for system prompt
-        self.system_prompt = """
-あなたは日本の会計・経理の専門家です。
-入出金明細から適切な勘定科目、税区分、取引先名を推定してください。
-
-以下の例を参考にしてください：
-
-例1: {"description": "Amazon Web Services", "amount": -5500}
-→ {"account_item_id": 604, "tax_code": 21, "partner_name": "アマゾンウェブサービスジャパン株式会社", "confidence": 0.95}
-
-例2: {"description": "セブンイレブン", "amount": -324}
-→ {"account_item_id": 831, "tax_code": 24, "partner_name": "セブンイレブン", "confidence": 0.90}
-
-例3: {"description": "売上入金 ○○商事", "amount": 108000}
-→ {"account_item_id": 101, "tax_code": 21, "partner_name": "○○商事", "confidence": 0.85}
-
-例4: {"description": "JR東日本 交通費", "amount": -2200}
-→ {"account_item_id": 607, "tax_code": 21, "partner_name": "JR東日本", "confidence": 0.92}
-
-例5: {"description": "給与振込", "amount": -250000}
-→ {"account_item_id": 650, "tax_code": 0, "partner_name": "従業員", "confidence": 0.88}
-
-勘定科目ID参考:
-- 101: 売上高
-- 604: 通信費
-- 607: 旅費交通費
-- 650: 給料手当
-- 831: 雑費
-
-税区分参考:
-- 0: 非課税
-- 21: 課税仕入 10%
-- 24: 課税仕入 8%（軽減）
-
-必ずJSON形式で回答してください。
-confidence は 0.0〜1.0 の値で、推定の確信度を表します。
-完全に確実な場合のみ 1.0 を設定してください。
-"""
-    
-    def analyze_transaction(self, txn: Dict) -> Dict:
-        """取引を分析して勘定科目等を推定"""
-        
-        user_message = f"""
-以下の取引を分析してください：
-日付: {txn.get('date', '')}
-金額: {txn.get('amount', 0)}円
-摘要: {txn.get('description', '')}
-"""
-        
-        data = {
-            "model": "claude-3-sonnet-20240229",
-            "max_tokens": 1000,
-            "temperature": 0.1,
-            "system": self.system_prompt,
-            "messages": [
-                {"role": "user", "content": user_message}
-            ]
-        }
-        
-        response = requests.post(self.base_url, headers=self.headers, json=data)
-        response.raise_for_status()
-        
-        # レスポンスからJSONを抽出
-        content = response.json()["content"][0]["text"]
-        try:
-            # JSONブロックを探して抽出
-            if "```json" in content:
-                json_start = content.find("```json") + 7
-                json_end = content.find("```", json_start)
-                json_str = content[json_start:json_end].strip()
-            else:
-                # JSONらしい部分を抽出
-                json_str = content.strip()
-                if json_str.startswith("```") and json_str.endswith("```"):
-                    json_str = json_str[3:-3].strip()
-            
-            return json.loads(json_str)
-        except (json.JSONDecodeError, ValueError) as e:
-            print(f"JSON parse error: {e}")
-            print(f"Content: {content}")
-            # JSONパースエラーの場合はデフォルト値を返す
-            return {
-                "account_item_id": 999,
-                "tax_code": 0,
-                "partner_name": "不明",
-                "confidence": 0.0
-            }
-
-
-class SlackNotifier:
-    """Slack通知クライアント"""
-    
-    def __init__(self, webhook_url: str):
-        self.webhook_url = webhook_url
-    
-    def send_confirmation(self, txn: Dict, analysis: Dict) -> bool:
-        """確認が必要な取引をSlackに通知"""
-        
-        message = {
-            "text": "仕訳の確認が必要です",
-            "blocks": [
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"*未仕訳取引の確認*\n信頼度: {analysis['confidence']:.2f}"
-                    }
-                },
-                {
-                    "type": "section",
-                    "fields": [
-                        {"type": "mrkdwn", "text": f"*日付:* {txn.get('date', '')}"},
-                        {"type": "mrkdwn", "text": f"*金額:* ¥{txn.get('amount', 0):,}"},
-                        {"type": "mrkdwn", "text": f"*摘要:* {txn.get('description', '')}"},
-                        {"type": "mrkdwn", "text": f"*推定取引先:* {analysis['partner_name']}"}
-                    ]
-                },
-                {
-                    "type": "section",
-                    "fields": [
-                        {"type": "mrkdwn", "text": f"*推定勘定科目ID:* {analysis['account_item_id']}"},
-                        {"type": "mrkdwn", "text": f"*推定税区分:* {analysis['tax_code']}"}
-                    ]
-                },
-                {
-                    "type": "actions",
-                    "elements": [
-                        {
-                            "type": "button",
-                            "text": {"type": "plain_text", "text": "承認"},
-                            "value": f"approve_{txn['id']}",
-                            "action_id": "approve_txn",
-                            "style": "primary"
-                        },
-                        {
-                            "type": "button",
-                            "text": {"type": "plain_text", "text": "修正"},
-                            "value": f"edit_{txn['id']}",
-                            "action_id": "edit_txn"
-                        }
-                    ]
-                }
-            ]
-        }
-        
-        response = requests.post(self.webhook_url, json=message)
-        return response.status_code == 200
-    
-    def send_summary(self, results: List[Dict]) -> bool:
-        """処理結果のサマリーを送信"""
-        
-        registered = len([r for r in results if r["status"] == "registered"])
-        needs_confirmation = len([r for r in results if r["status"] == "needs_confirmation"])
-        errors = len([r for r in results if r["status"] == "error"])
-        
-        # エラー詳細を収集
-        error_details = []
-        for r in results:
-            if r["status"] == "error":
-                error_details.append(f"• TxnID {r['txn_id']}: {r.get('error', 'Unknown error')}")
-        
-        message = {
-            "text": f"仕訳処理完了: 登録 {registered}件, 要確認 {needs_confirmation}件, エラー {errors}件",
-            "blocks": [
-                {
-                    "type": "header",
-                    "text": {"type": "plain_text", "text": "仕訳処理結果"}
-                },
-                {
-                    "type": "section",
-                    "fields": [
-                        {"type": "mrkdwn", "text": f"*自動登録:* {registered}件"},
-                        {"type": "mrkdwn", "text": f"*要確認:* {needs_confirmation}件"},
-                        {"type": "mrkdwn", "text": f"*エラー:* {errors}件"},
-                        {"type": "mrkdwn", "text": f"*処理時刻:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"}
-                    ]
-                }
-            ]
-        }
-        
-        # エラーがある場合は詳細を追加
-        if error_details:
-            error_text = "\n".join(error_details[:10])  # 最大10件まで
-            if len(error_details) > 10:
-                error_text += f"\n... 他 {len(error_details) - 10}件"
-            
-            message["blocks"].append({
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"*エラー詳細:*\n{error_text}"
-                }
-            })
-        
-        response = requests.post(self.webhook_url, json=message)
-        return response.status_code == 200
-
-
-class EnhancedClaudeClient(ClaudeClient):
-    """過去の取引履歴を活用するClaude APIクライアント"""
-    
-    def __init__(self, api_key: str, freee_client: FreeeClient):
-        super().__init__(api_key)
-        self.freee_client = freee_client
-        self._load_accounting_rules()
-    
-    def _load_accounting_rules(self):
-        """日本の会計ルールをロード"""
         # 勘定科目と税区分の情報を取得
         try:
             self.account_items = self.freee_client.get_account_items()
@@ -509,16 +321,23 @@ class EnhancedClaudeClient(ClaudeClient):
             self.account_items = {}
             self.tax_codes = {}
         
-        # システムプロンプトを更新
+        # システムプロンプトを構築
+        self._build_system_prompt()
+    
+    def _build_system_prompt(self):
+        """システムプロンプトを構築"""
+        account_items_text = self._format_account_items()
+        tax_codes_text = self._format_tax_codes()
+        
         self.system_prompt = f"""
 あなたは日本の会計・経理の専門家です。
 入出金明細から適切な勘定科目、税区分、取引先名を推定してください。
 
 使用可能な勘定科目:
-{self._format_account_items()}
+{account_items_text}
 
 使用可能な税区分:
-{self._format_tax_codes()}
+{tax_codes_text}
 
 日本の会計ルール:
 - 消費税10%の課税仕入は税区分21
@@ -564,17 +383,16 @@ confidence は 0.0〜1.0 の値で、推定の確信度を表します。
             codes.append(f"- {code}: {name}")
         return "\n".join(codes)
     
-    def analyze_transaction_with_history(self, txn: Dict) -> Dict:
-        """過去の取引履歴を参考に取引を分析"""
+    def analyze_transaction_with_context(self, txn: Dict) -> Dict:
+        """コンテキストを活用した取引分析"""
+        # 学習システムからコンテキストを取得
+        learning_context = ""
+        if self.learning_system:
+            learning_context = self.learning_system.generate_learning_context(txn)
         
-        # 類似する過去の取引を取得
-        similar_deals = self.freee_client.analyze_historical_patterns(
-            txn.get("description", ""),
-            txn.get("amount", 0)
-        )
-        
-        # 過去の取引パターンをコンテキストに含める
-        historical_context = self._format_historical_context(similar_deals)
+        # 過去の類似取引を取得
+        historical_deals = self.freee_client.get_historical_deals(days=365, limit=200)
+        historical_context = self._format_historical_context(txn, historical_deals)
         
         user_message = f"""
 以下の取引を分析してください：
@@ -585,7 +403,9 @@ confidence は 0.0〜1.0 の値で、推定の確信度を表します。
 過去の類似取引パターン:
 {historical_context}
 
-これらの過去の取引パターンを参考に、最も適切な勘定科目・税区分・取引先を推定してください。
+{learning_context}
+
+これらの過去の取引パターンと学習データを参考に、最も適切な勘定科目・税区分・取引先を推定してください。
 """
         
         data = {
@@ -617,8 +437,8 @@ confidence は 0.0〜1.0 の値で、推定の確信度を表します。
             result = json.loads(json_str)
             
             # 過去の取引と完全一致する場合は信頼度を上げる
-            if similar_deals and self._is_perfect_match(result, similar_deals[0]):
-                result["confidence"] = min(result.get("confidence", 0) * 1.2, 1.0)
+            if self._has_perfect_historical_match(result, historical_deals):
+                result["confidence"] = min(result.get("confidence", 0) * 1.1, 1.0)
             
             return result
             
@@ -631,38 +451,146 @@ confidence は 0.0〜1.0 の値で、推定の確信度を表します。
                 "confidence": 0.0
             }
     
-    def _format_historical_context(self, similar_deals: List[Dict]) -> str:
+    def _format_historical_context(self, txn: Dict, historical_deals: List[Dict]) -> str:
         """過去の取引をコンテキスト用にフォーマット"""
+        similar_deals = self._find_similar_deals(txn, historical_deals)
+        
         if not similar_deals:
             return "（類似する過去の取引はありません）"
         
         context_lines = []
         for i, deal in enumerate(similar_deals[:5], 1):
-            account_name = self.account_items.get(deal["account_item_id"], "不明")
-            tax_name = self.tax_codes.get(deal["tax_code"], "不明")
+            partner_name = self.freee_client._get_partner_name(deal.get("partner_id"))
             
             context_lines.append(f"""
 例{i}:
-  日付: {deal['date']}
-  金額: {deal['amount']:,}円
-  勘定科目: {account_name} (ID: {deal['account_item_id']})
-  税区分: {tax_name} (コード: {deal['tax_code']})
-  取引先: {deal['partner_name'] or '未設定'}""")
+  日付: {deal.get('issue_date', '')}
+  取引先: {partner_name or '未設定'}
+  金額: {deal.get('amount', 0):,}円""")
+            
+            # 取引詳細を追加
+            for detail in deal.get("details", [])[:1]:  # 最初の明細のみ
+                account_name = self.account_items.get(detail.get("account_item_id"), "不明")
+                tax_name = self.tax_codes.get(detail.get("tax_code"), "不明")
+                
+                context_lines.append(f"""  勘定科目: {account_name} (ID: {detail.get('account_item_id')})
+  税区分: {tax_name} (コード: {detail.get('tax_code')})""")
         
         return "\n".join(context_lines)
     
-    def _is_perfect_match(self, result: Dict, historical: Dict) -> bool:
-        """推定結果と過去の取引が完全一致するかチェック"""
-        return (
-            result.get("account_item_id") == historical.get("account_item_id") and
-            result.get("tax_code") == historical.get("tax_code")
-        )
+    def _find_similar_deals(self, txn: Dict, historical_deals: List[Dict]) -> List[Dict]:
+        """類似する過去取引を検索"""
+        similar_deals = []
+        txn_amount = abs(txn.get("amount", 0))
+        txn_description = txn.get("description", "").lower()
+        
+        for deal in historical_deals:
+            # 金額の類似性チェック（20%以内の差）
+            deal_amount = abs(deal.get("amount", 0))
+            if deal_amount > 0 and txn_amount > 0:
+                amount_ratio = min(deal_amount, txn_amount) / max(deal_amount, txn_amount)
+                if amount_ratio < 0.8:  # 20%以上の差がある場合はスキップ
+                    continue
+            
+            # 摘要の類似性チェック
+            deal_ref = deal.get("ref_number", "").lower()
+            if txn_description and deal_ref:
+                if self.freee_client._is_similar_description(txn_description, deal_ref):
+                    similar_deals.append(deal)
+        
+        # 類似度でソート（金額差の小さい順）
+        similar_deals.sort(key=lambda d: abs(abs(d.get("amount", 0)) - txn_amount))
+        
+        return similar_deals[:10]
+    
+    def _has_perfect_historical_match(self, result: Dict, historical_deals: List[Dict]) -> bool:
+        """完全一致する過去取引があるかチェック"""
+        for deal in historical_deals[:5]:  # 上位5件のみチェック
+            for detail in deal.get("details", []):
+                if (result.get("account_item_id") == detail.get("account_item_id") and
+                    result.get("tax_code") == detail.get("tax_code")):
+                    return True
+        return False
 
 
-def enhanced_process_wallet_txn(txn: Dict, freee_client: FreeeClient, 
-                              claude_client: EnhancedClaudeClient, 
-                              slack_notifier: Optional[SlackNotifier]) -> Dict:
-    """強化版の個別取引処理（重複チェック・請求書消し込み対応）"""
+class SlackNotifier:
+    """Slack通知クライアント"""
+    
+    def __init__(self, webhook_url: str):
+        self.webhook_url = webhook_url
+    
+    def send_confirmation(self, txn: Dict, analysis: Dict) -> bool:
+        """確認が必要な取引をSlackに通知"""
+        
+        message = {
+            "text": "仕訳の確認が必要です",
+            "blocks": [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"*未仕訳取引の確認*\n信頼度: {analysis['confidence']:.2f}"
+                    }
+                },
+                {
+                    "type": "section",
+                    "fields": [
+                        {"type": "mrkdwn", "text": f"*日付:* {txn.get('date', '')}"},
+                        {"type": "mrkdwn", "text": f"*金額:* ¥{txn.get('amount', 0):,}"},
+                        {"type": "mrkdwn", "text": f"*摘要:* {txn.get('description', '')}"},
+                        {"type": "mrkdwn", "text": f"*推定取引先:* {analysis['partner_name']}"}
+                    ]
+                },
+                {
+                    "type": "section",
+                    "fields": [
+                        {"type": "mrkdwn", "text": f"*推定勘定科目ID:* {analysis['account_item_id']}"},
+                        {"type": "mrkdwn", "text": f"*推定税区分:* {analysis['tax_code']}"}
+                    ]
+                }
+            ]
+        }
+        
+        response = requests.post(self.webhook_url, json=message)
+        return response.status_code == 200
+    
+    def send_summary(self, results: List[Dict]) -> bool:
+        """処理結果のサマリーを送信"""
+        
+        registered = len([r for r in results if r["status"] == "registered"])
+        needs_confirmation = len([r for r in results if r["status"] == "needs_confirmation"])
+        errors = len([r for r in results if r["status"] == "error"])
+        duplicates_skipped = len([r for r in results if r["status"] == "duplicate_skipped"])
+        
+        message = {
+            "text": f"仕訳処理完了: 登録 {registered}件, 要確認 {needs_confirmation}件, 重複スキップ {duplicates_skipped}件, エラー {errors}件",
+            "blocks": [
+                {
+                    "type": "header",
+                    "text": {"type": "plain_text", "text": "仕訳処理結果（改良版）"}
+                },
+                {
+                    "type": "section",
+                    "fields": [
+                        {"type": "mrkdwn", "text": f"*自動登録:* {registered}件"},
+                        {"type": "mrkdwn", "text": f"*要確認:* {needs_confirmation}件"},
+                        {"type": "mrkdwn", "text": f"*重複スキップ:* {duplicates_skipped}件"},
+                        {"type": "mrkdwn", "text": f"*エラー:* {errors}件"},
+                        {"type": "mrkdwn", "text": f"*処理時刻:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"}
+                    ]
+                }
+            ]
+        }
+        
+        response = requests.post(self.webhook_url, json=message)
+        return response.status_code == 200
+
+
+def integrated_process_wallet_txn(txn: Dict, freee_client: IntegratedFreeeClient, 
+                                 claude_client: IntegratedClaudeClient, 
+                                 slack_notifier: Optional[SlackNotifier],
+                                 learning_system: Optional[TransactionLearningSystem]) -> Dict:
+    """完全統合版の個別取引処理"""
     try:
         print(f"  処理開始: {txn.get('description', '')}")
         
@@ -683,9 +611,9 @@ def enhanced_process_wallet_txn(txn: Dict, freee_client: FreeeClient,
                 "duplicate_deals": [d["id"] for d in duplicates]
             }
         
-        # Step 2: 過去の履歴を踏まえた分析
-        print(f"  履歴学習分析中...")
-        analysis = claude_client.analyze_transaction_with_history(txn)
+        # Step 2: コンテキスト活用分析
+        print(f"  コンテキスト活用分析中...")
+        analysis = claude_client.analyze_transaction_with_context(txn)
         print(f"  分析結果: 信頼度={analysis['confidence']:.2f}")
 
         # DRY_RUNモードのチェック
@@ -720,6 +648,14 @@ def enhanced_process_wallet_txn(txn: Dict, freee_client: FreeeClient,
                 txn_type="income" if txn.get("amount", 0) > 0 else "expense"
             )
             print(f"  登録完了: Deal ID={result['deal']['id']}")
+            
+            # Step 5: 学習システムに記録
+            if learning_system:
+                learning_system.record_transaction(txn, analysis, {
+                    "status": "registered",
+                    "deal_id": result['deal']['id']
+                })
+            
             return {
                 "txn_id": txn["id"],
                 "status": "registered",
@@ -730,9 +666,17 @@ def enhanced_process_wallet_txn(txn: Dict, freee_client: FreeeClient,
         else:
             # 信頼度が低い場合はSlack通知
             print(f"  信頼度{CONFIDENCE_THRESHOLD*100:.0f}%未満のためSlack通知を送信します（信頼度: {analysis['confidence']:.2f}）")
+            
+            # 学習システムに記録（要確認として）
+            if learning_system:
+                learning_system.record_transaction(txn, analysis, {
+                    "status": "needs_confirmation"
+                })
+            
             if slack_notifier:
                 sent = slack_notifier.send_confirmation(txn, analysis)
                 print(f"  Slack通知送信結果: {sent}")
+            
             return {
                 "txn_id": txn["id"],
                 "status": "needs_confirmation",
@@ -749,10 +693,24 @@ def enhanced_process_wallet_txn(txn: Dict, freee_client: FreeeClient,
         }
 
 
-def enhanced_main():
-    """過去の取引履歴を活用したメイン処理"""
+def save_results(results: List[Dict]):
+    """処理結果をJSONファイルに保存"""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"results_{timestamp}.json"
     
-    print("=== freee自動仕訳処理を開始します（履歴学習版）===")
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump({
+            "timestamp": datetime.now().isoformat(),
+            "results": results
+        }, f, ensure_ascii=False, indent=2)
+    
+    print(f"\n結果を {filename} に保存しました")
+
+
+def main():
+    """完全統合版メイン処理"""
+    
+    print("=== freee自動仕訳処理を開始します（完全統合版）===")
     print(f"実行時刻: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     # トークンの自動更新を試みる
@@ -780,19 +738,21 @@ def enhanced_main():
     if os.getenv("DRY_RUN", "false").lower() == "true":
         print("\n*** DRY_RUNモード: 実際の登録は行いません ***\n")
     
+    # 学習システムの初期化
+    learning_system = None
+    if TransactionLearningSystem:
+        try:
+            learning_system = TransactionLearningSystem()
+            print("学習システムを初期化しました")
+        except Exception as e:
+            print(f"学習システムの初期化に失敗: {e}")
+    
     # クライアントの初期化
-    freee_client = FreeeClient(freee_access_token, freee_company_id)
-    claude_client = EnhancedClaudeClient(claude_api_key, freee_client)
+    freee_client = IntegratedFreeeClient(freee_access_token, freee_company_id)
+    claude_client = IntegratedClaudeClient(claude_api_key, freee_client, learning_system)
     slack_notifier = SlackNotifier(slack_webhook_url) if slack_webhook_url else None
     
     try:
-        # 過去の取引パターンを分析
-        print("\n過去の取引パターンを学習中...")
-        historical_summary = analyze_company_patterns(freee_client)
-        print(f"  - 過去1年間の取引: {historical_summary['total_deals']}件")
-        print(f"  - 頻出取引先: {', '.join(historical_summary['top_partners'][:5])}")
-        print(f"  - 頻出勘定科目: {', '.join(historical_summary['top_accounts'][:5])}")
-        
         # 未仕訳明細の取得
         print("\n未仕訳明細を取得中...")
         wallet_txns = freee_client.get_unmatched_wallet_txns()
@@ -802,12 +762,12 @@ def enhanced_main():
             print("処理対象の明細はありません")
             return []
         
-        # 各取引の処理（強化版）
+        # 各取引の処理（完全統合版）
         print("\n取引を処理中...")
         results = []
         for i, txn in enumerate(wallet_txns, 1):
             print(f"\n[{i}/{len(wallet_txns)}] 処理中: {txn.get('description', 'No description')} ¥{txn.get('amount', 0):,}")
-            result = enhanced_process_wallet_txn(txn, freee_client, claude_client, slack_notifier)
+            result = integrated_process_wallet_txn(txn, freee_client, claude_client, slack_notifier, learning_system)
             results.append(result)
         
         # 結果の保存
@@ -847,56 +807,5 @@ def enhanced_main():
         return []
 
 
-def save_results(results: List[Dict]):
-    """処理結果をJSONファイルに保存"""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"results_{timestamp}.json"
-    
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump({
-            "timestamp": datetime.now().isoformat(),
-            "results": results
-        }, f, ensure_ascii=False, indent=2)
-    
-    print(f"\n結果を {filename} に保存しました")
-
-
-def analyze_company_patterns(freee_client: FreeeClient) -> Dict:
-    """会社固有の取引パターンを分析"""
-    deals = freee_client.get_historical_deals(days=365, limit=1000)
-    
-    partner_counts = defaultdict(int)
-    account_counts = defaultdict(int)
-    
-    for deal in deals:
-        # 取引先の集計
-        if deal.get("partner_id"):
-            partner_name = freee_client._get_partner_name(deal["partner_id"])
-            if partner_name:
-                partner_counts[partner_name] += 1
-        
-        # 勘定科目の集計
-        for detail in deal.get("details", []):
-            account_id = detail.get("account_item_id")
-            if account_id:
-                account_counts[account_id] += 1
-    
-    # 頻出順にソート
-    top_partners = sorted(partner_counts.keys(), key=lambda x: partner_counts[x], reverse=True)
-    top_accounts = sorted(account_counts.keys(), key=lambda x: account_counts[x], reverse=True)
-    
-    # 勘定科目名を取得
-    account_items = freee_client.get_account_items()
-    top_account_names = [account_items.get(aid, f"ID:{aid}") for aid in top_accounts]
-    
-    return {
-        "total_deals": len(deals),
-        "top_partners": top_partners,
-        "top_accounts": top_account_names,
-        "partner_counts": dict(partner_counts),
-        "account_counts": dict(account_counts)
-    }
-
-
 if __name__ == "__main__":
-    enhanced_main()
+    main()
