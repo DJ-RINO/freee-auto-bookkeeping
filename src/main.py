@@ -415,18 +415,30 @@ def main():
     
     # その他の環境変数の読み込み
     freee_company_id = int(os.getenv("FREEE_COMPANY_ID", "0"))
-    claude_api_key = os.getenv("CLAUDE_API_KEY")
+    claude_api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY")
     slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")
+    
+    # APIキー使用状況の表示
+    if os.getenv("ANTHROPIC_API_KEY"):
+        print("✅ ANTHROPIC_API_KEYを使用してClaude APIにアクセスします")
+    elif os.getenv("CLAUDE_API_KEY"):
+        print("⚠️  CLAUDE_API_KEYを使用してClaude APIにアクセスします")
+    
+    # 取引制限の読み込み
+    transaction_limit = int(os.getenv("TRANSACTION_LIMIT", "100"))
     
     # 必須パラメータのチェック
     if not freee_access_token or not freee_company_id or not claude_api_key:
         print("エラー: 必須の環境変数が設定されていません")
-        print("FREEE_ACCESS_TOKEN, FREEE_COMPANY_ID, CLAUDE_API_KEY を確認してください")
+        print("FREEE_ACCESS_TOKEN, FREEE_COMPANY_ID, ANTHROPIC_API_KEY または CLAUDE_API_KEY を確認してください")
         return []
     
     # DRY_RUNモードの表示
     if os.getenv("DRY_RUN", "false").lower() == "true":
         print("\n*** DRY_RUNモード: 実際の登録は行いません ***\n")
+    
+    # 取引制限の表示
+    print(f"📊 取引処理上限: {transaction_limit}件")
     
     # クライアントの初期化
     freee_client = FreeeClient(freee_access_token, freee_company_id)
@@ -436,7 +448,7 @@ def main():
     try:
         # 未仕訳明細の取得
         print("\n未仕訳明細を取得中...")
-        wallet_txns = freee_client.get_unmatched_wallet_txns()
+        wallet_txns = freee_client.get_unmatched_wallet_txns(limit=transaction_limit)
         print(f"{len(wallet_txns)}件の未仕訳明細を取得しました")
         
         if not wallet_txns:
