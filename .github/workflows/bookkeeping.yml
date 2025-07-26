@@ -14,6 +14,11 @@ on:
         options:
           - 'true'
           - 'false'
+      limit:
+        description: '処理する取引数の上限 (テスト用)'
+        required: false
+        default: '100'
+        type: string
 
 jobs:
   process-transactions:
@@ -52,6 +57,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        TRANSACTION_LIMIT: ${{ github.event.inputs.limit || '100' }}
       run: |
         pip install pynacl  # トークン暗号化用
         python src/main.py

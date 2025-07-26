@@ -435,8 +435,9 @@ def main():
     
     try:
         # 未仕訳明細の取得
-        print("\n未仕訳明細を取得中...")
-        wallet_txns = freee_client.get_unmatched_wallet_txns()
+        transaction_limit = int(os.getenv("TRANSACTION_LIMIT", "100"))
+        print(f"\n未仕訳明細を取得中... (上限: {transaction_limit}件)")
+        wallet_txns = freee_client.get_unmatched_wallet_txns(limit=transaction_limit)
         print(f"{len(wallet_txns)}件の未仕訳明細を取得しました")
         
         if not wallet_txns:
