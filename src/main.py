@@ -113,6 +113,59 @@ class FreeeClient:
         response = requests.post(create_url, headers=self.headers, json=data)
         response.raise_for_status()
         return response.json()["partner"]["id"]
+    
+    def verify_wallet_txn_status(self, wallet_txn_id: int) -> str:
+        """wallet_txnのステータスを確認"""
+        url = f"{self.base_url}/wallet_txns/{wallet_txn_id}"
+        params = {"company_id": self.company_id}
+        
+        response = requests.get(url, headers=self.headers, params=params)
+        response.raise_for_status()
+        return response.json().get("wallet_txn", {}).get("status", "unknown")
+    
+    def verify_reconciliation(self, wallet_txn_id: int, max_retries: int = 3, delay_seconds: int = 2) -> bool:
+        """wallet_txnの消し込みが完了したかを確認（リトライ付き）"""
+        import time
+        
+        for attempt in range(max_retries):
+            if attempt > 0:
+                time.sleep(delay_seconds)
+            
+            try:
+                status = self.verify_wallet_txn_status(wallet_txn_id)
+                if status == "matched":
+                    return True
+                print(f"  リトライ {attempt + 1}/{max_retries}: ステータス = {status}")
+            except Exception as e:
+                print(f"  ステータス確認エラー (試行 {attempt + 1}): {str(e)}")
+        
+        return False
+    
+    def check_existing_deals_for_wallet_txn(self, wallet_txn_id: int) -> List[Dict]:
+        """wallet_txnに既に紐付いているdealがあるかチェック"""
+        url = f"{self.base_url}/deals"
+        params = {
+            "company_id": self.company_id,
+            "limit": 100
+        }
+        
+        try:
+            response = requests.get(url, headers=self.headers, params=params)
+            response.raise_for_status()
+            deals = response.json().get("deals", [])
+            
+            # wallet_txnに紐付いているdealを検索
+            linked_deals = []
+            for deal in deals:
+                for payment in deal.get("payments", []):
+                    if (payment.get("from_walletable_type") == "wallet_txn" and 
+                        payment.get("from_walletable_id") == wallet_txn_id):
+                        linked_deals.append(deal)
+            
+            return linked_deals
+        except Exception as e:
+            print(f"  既存deal確認エラー: {str(e)}")
+            return []
 
 
 class ClaudeClient:
@@ -279,17 +332,25 @@ class SlackNotifier:
         """処理結果のサマリーを送信"""
         
         registered = len([r for r in results if r["status"] == "registered"])
+        registered_not_reconciled = len([r for r in results if r["status"] == "registered_but_not_reconciled"])
         needs_confirmation = len([r for r in results if r["status"] == "needs_confirmation"])
         errors = len([r for r in results if r["status"] == "error"])
+        already_processed = len([r for r in results if r["status"] == "already_processed"])
+        already_linked = len([r for r in results if r["status"] == "already_linked"])
         
         # エラー詳細を収集
         error_details = []
+        warning_details = []
         for r in results:
             if r["status"] == "error":
                 error_details.append(f"• TxnID {r['txn_id']}: {r.get('error', 'Unknown error')}")
+            elif r["status"] == "registered_but_not_reconciled":
+                warning_details.append(f"• TxnID {r['txn_id']}: {r.get('warning', 'Reconciliation failed')}")
+        
+        total_success = registered + registered_not_reconciled
         
         message = {
-            "text": f"仕訳処理完了: 登録 {registered}件, 要確認 {needs_confirmation}件, エラー {errors}件",
+            "text": f"仕訳処理完了: 成功 {total_success}件, 要確認 {needs_confirmation}件, エラー {errors}件",
             "blocks": [
                 {
                     "type": "header",
@@ -298,16 +359,18 @@ class SlackNotifier:
                 {
                     "type": "section",
                     "fields": [
-                        {"type": "mrkdwn", "text": f"*自動登録:* {registered}件"},
+                        {"type": "mrkdwn", "text": f"*自動登録（完全）:* {registered}件"},
+                        {"type": "mrkdwn", "text": f"*自動登録（要注意）:* {registered_not_reconciled}件"},
                         {"type": "mrkdwn", "text": f"*要確認:* {needs_confirmation}件"},
                         {"type": "mrkdwn", "text": f"*エラー:* {errors}件"},
+                        {"type": "mrkdwn", "text": f"*重複スキップ:* {already_processed + already_linked}件"},
                         {"type": "mrkdwn", "text": f"*処理時刻:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"}
                     ]
                 }
             ]
         }
         
-        # エラーがある場合は詳細を追加
+        # エラー・警告がある場合は詳細を追加
         if error_details:
             error_text = "\n".join(error_details[:10])  # 最大10件まで
             if len(error_details) > 10:
@@ -321,15 +384,55 @@ class SlackNotifier:
                 }
             })
         
+        if warning_details:
+            warning_text = "\n".join(warning_details[:5])  # 最大5件まで
+            if len(warning_details) > 5:
+                warning_text += f"\n... 他 {len(warning_details) - 5}件"
+            
+            message["blocks"].append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*⚠️ 要注意（消し込み未完了）:*\n{warning_text}"
+                }
+            })
+        
         response = requests.post(self.webhook_url, json=message)
         return response.status_code == 200
 
 
 def process_wallet_txn(txn: Dict, freee_client: FreeeClient, 
                       claude_client: ClaudeClient, 
-                      slack_notifier: Optional[SlackNotifier]) -> Dict:
+                      slack_notifier: Optional[SlackNotifier],
+                      processed_txns: set = None) -> Dict:
     """個別の取引を処理"""
     try:
+        # 重複処理チェック
+        txn_id = txn["id"]
+        if processed_txns and txn_id in processed_txns:
+            print(f"  スキップ: 取引 ID {txn_id} は既に処理済みです")
+            return {
+                "txn_id": txn_id,
+                "status": "already_processed",
+                "reason": "Already processed in this session"
+            }
+        
+        # 既存dealとの紐付けチェック
+        try:
+            existing_deals = freee_client.check_existing_deals_for_wallet_txn(txn_id)
+            if existing_deals:
+                print(f"  スキップ: 取引 ID {txn_id} は既に {len(existing_deals)} 件のdealに紐付いています")
+                if processed_txns:
+                    processed_txns.add(txn_id)
+                return {
+                    "txn_id": txn_id,
+                    "status": "already_linked",
+                    "reason": f"Already linked to {len(existing_deals)} deal(s)",
+                    "linked_deals": [deal["id"] for deal in existing_deals]
+                }
+        except Exception as e:
+            print(f"  警告: 既存deal確認でエラーが発生しましたが処理を続行します: {str(e)}")
+        
         # Claude APIで分析
         print(f"  分析中: {txn.get('description', '')}")
         analysis = claude_client.analyze_transaction(txn)
@@ -347,21 +450,76 @@ def process_wallet_txn(txn: Dict, freee_client: FreeeClient,
         # 90%以上は自動登録
         if analysis["confidence"] >= CONFIDENCE_THRESHOLD:
             print(f"  信頼度90%以上のため自動登録を実行中...")
-            result = freee_client.create_deal(
-                wallet_txn_id=txn["id"],
-                account_item_id=analysis["account_item_id"],
-                tax_code=analysis["tax_code"],
-                partner_name=analysis["partner_name"],
-                amount=abs(txn.get("amount", 0)),
-                txn_type="income" if txn.get("amount", 0) > 0 else "expense"
-            )
-            print(f"  登録完了: Deal ID={result['deal']['id']}")
-            return {
-                "txn_id": txn["id"],
-                "status": "registered",
-                "deal_id": result["deal"]["id"],
-                "analysis": analysis
-            }
+            
+            # Deal作成を実行（リトライ付き）
+            max_create_retries = 2
+            for create_attempt in range(max_create_retries):
+                try:
+                    result = freee_client.create_deal(
+                        wallet_txn_id=txn["id"],
+                        account_item_id=analysis["account_item_id"],
+                        tax_code=analysis["tax_code"],
+                        partner_name=analysis["partner_name"],
+                        amount=abs(txn.get("amount", 0)),
+                        txn_type="income" if txn.get("amount", 0) > 0 else "expense"
+                    )
+                    print(f"  登録完了: Deal ID={result['deal']['id']}")
+                    break
+                    
+                except Exception as e:
+                    print(f"  Deal作成エラー (試行 {create_attempt + 1}/{max_create_retries}): {str(e)}")
+                    if create_attempt == max_create_retries - 1:
+                        # 最終試行でも失敗した場合
+                        return {
+                            "txn_id": txn["id"],
+                            "status": "error",
+                            "error": f"Deal作成に失敗しました: {str(e)}",
+                            "analysis": analysis
+                        }
+                    import time
+                    time.sleep(2)  # 2秒待ってからリトライ
+            
+            # 消し込み完了の確認
+            print(f"  消し込み完了の確認中...")
+            try:
+                reconciled = freee_client.verify_reconciliation(txn["id"])
+                if reconciled:
+                    print(f"  ✓ 消し込み完了: wallet_txn {txn['id']} のステータスが matched に変更されました")
+                    if processed_txns is not None:
+                        processed_txns.add(txn_id)
+                    return {
+                        "txn_id": txn["id"],
+                        "status": "registered",
+                        "deal_id": result["deal"]["id"],
+                        "analysis": analysis,
+                        "reconciled": True
+                    }
+                else:
+                    print(f"  ⚠️ 消し込み未完了: wallet_txn {txn['id']} のステータスが matched になりませんでした")
+                    # 消し込みが失敗した場合でも、dealは作成されているため部分的成功として扱う
+                    if processed_txns is not None:
+                        processed_txns.add(txn_id)
+                    return {
+                        "txn_id": txn["id"],
+                        "status": "registered_but_not_reconciled",
+                        "deal_id": result["deal"]["id"],
+                        "analysis": analysis,
+                        "reconciled": False,
+                        "warning": "Deal was created but wallet_txn reconciliation failed"
+                    }
+            except Exception as e:
+                print(f"  消し込み確認エラー: {str(e)}")
+                # 消し込み確認がエラーでも、dealは作成されているため部分的成功として扱う
+                if processed_txns is not None:
+                    processed_txns.add(txn_id)
+                return {
+                    "txn_id": txn["id"],
+                    "status": "registered_but_not_reconciled",
+                    "deal_id": result["deal"]["id"],
+                    "analysis": analysis,
+                    "reconciled": False,
+                    "warning": f"Deal created but reconciliation verification failed: {str(e)}"
+                }
         else:
             # 90%未満は全てSlack通知
             print(f"  信頼度90%未満のためSlack通知を送信します（信頼度: {analysis['confidence']:.2f}）")
@@ -446,9 +604,11 @@ def main():
         # 各取引の処理
         print("\n取引を処理中...")
         results = []
+        processed_txns = set()  # 処理済み取引IDのトラッキング
+        
         for i, txn in enumerate(wallet_txns, 1):
             print(f"\n[{i}/{len(wallet_txns)}] 処理中: {txn.get('description', 'No description')} ¥{txn.get('amount', 0):,}")
-            result = process_wallet_txn(txn, freee_client, claude_client, slack_notifier)
+            result = process_wallet_txn(txn, freee_client, claude_client, slack_notifier, processed_txns)
             results.append(result)
         
         # 結果の保存
@@ -461,14 +621,23 @@ def main():
         
         # 結果の出力
         registered = len([r for r in results if r["status"] == "registered"])
+        registered_not_reconciled = len([r for r in results if r["status"] == "registered_but_not_reconciled"])
         needs_confirmation = len([r for r in results if r["status"] == "needs_confirmation"])
         errors = len([r for r in results if r["status"] == "error"])
         dry_run = len([r for r in results if r["status"] == "dry_run"])
+        already_processed = len([r for r in results if r["status"] == "already_processed"])
+        already_linked = len([r for r in results if r["status"] == "already_linked"])
         
         print("\n=== 処理完了 ===")
-        print(f"  自動登録: {registered}件")
+        print(f"  自動登録（完全）: {registered}件")
+        if registered_not_reconciled > 0:
+            print(f"  自動登録（消し込み未完了）: {registered_not_reconciled}件")
         print(f"  要確認: {needs_confirmation}件")
         print(f"  エラー: {errors}件")
+        if already_processed > 0:
+            print(f"  重複処理スキップ: {already_processed}件")
+        if already_linked > 0:
+            print(f"  既存deal紐付き済み: {already_linked}件")
         if dry_run > 0:
             print(f"  DRY_RUN: {dry_run}件")
         
