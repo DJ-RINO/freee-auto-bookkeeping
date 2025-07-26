@@ -275,6 +275,43 @@ class SlackNotifier:
         response = requests.post(self.webhook_url, json=message)
         return response.status_code == 200
     
+    def send_auto_registered(self, txn: Dict, analysis: Dict, deal_id: int) -> bool:
+        """自動登録された取引をSlackに通知"""
+        
+        message = {
+            "text": "取引が自動登録されました",
+            "blocks": [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"✅ *取引が自動登録されました*\n信頼度: {analysis['confidence']:.2f} (≥{CONFIDENCE_THRESHOLD:.2f})"
+                    }
+                },
+                {
+                    "type": "section",
+                    "fields": [
+                        {"type": "mrkdwn", "text": f"*日付:* {txn.get('date', '')}"},
+                        {"type": "mrkdwn", "text": f"*金額:* ¥{txn.get('amount', 0):,}"},
+                        {"type": "mrkdwn", "text": f"*摘要:* {txn.get('description', '')}"},
+                        {"type": "mrkdwn", "text": f"*取引先:* {analysis['partner_name']}"}
+                    ]
+                },
+                {
+                    "type": "section",
+                    "fields": [
+                        {"type": "mrkdwn", "text": f"*勘定科目ID:* {analysis['account_item_id']}"},
+                        {"type": "mrkdwn", "text": f"*税区分:* {analysis['tax_code']}"},
+                        {"type": "mrkdwn", "text": f"*freee Deal ID:* {deal_id}"},
+                        {"type": "mrkdwn", "text": f"*処理時刻:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"}
+                    ]
+                }
+            ]
+        }
+        
+        response = requests.post(self.webhook_url, json=message)
+        return response.status_code == 200
+    
     def send_summary(self, results: List[Dict]) -> bool:
         """処理結果のサマリーを送信"""
         
@@ -355,16 +392,24 @@ def process_wallet_txn(txn: Dict, freee_client: FreeeClient,
                 amount=abs(txn.get("amount", 0)),
                 txn_type="income" if txn.get("amount", 0) > 0 else "expense"
             )
-            print(f"  登録完了: Deal ID={result['deal']['id']}")
+            deal_id = result["deal"]["id"]
+            print(f"  登録完了: Deal ID={deal_id}")
+            
+            # 自動登録された取引もSlackに通知
+            if slack_notifier:
+                print(f"  自動登録の結果をSlackに通知中...")
+                sent = slack_notifier.send_auto_registered(txn, analysis, deal_id)
+                print(f"  Slack通知送信結果: {sent}")
+            
             return {
                 "txn_id": txn["id"],
                 "status": "registered",
-                "deal_id": result["deal"]["id"],
+                "deal_id": deal_id,
                 "analysis": analysis
             }
         else:
-            # 90%未満は全てSlack通知
-            print(f"  信頼度90%未満のためSlack通知を送信します（信頼度: {analysis['confidence']:.2f}）")
+            # 90%未満は承認が必要な取引としてSlack通知
+            print(f"  信頼度90%未満のため承認要求をSlack通知します（信頼度: {analysis['confidence']:.2f}）")
             if slack_notifier:
                 sent = slack_notifier.send_confirmation(txn, analysis)
                 print(f"  Slack通知送信結果: {sent}")
