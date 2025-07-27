@@ -161,7 +161,10 @@ class ClaudeClient:
 - 21: 課税仕入 10%
 - 24: 課税仕入 8%（軽減）
 
-必ずJSON形式で回答してください。
+必ずJSON形式のみで回答してください。説明や理由は含めないでください。
+以下の形式で出力してください：
+{"account_item_id": 数値, "tax_code": 数値, "partner_name": "文字列", "confidence": 0.0〜1.0}
+
 confidence は 0.0〜1.0 の値で、推定の確信度を表します。
 完全に確実な場合のみ 1.0 を設定してください。
 """
@@ -207,10 +210,15 @@ confidence は 0.0〜1.0 の値で、推定の確信度を表します。
                 json_end = content.find("```", json_start)
                 json_str = content[json_start:json_end].strip()
             else:
-                # JSONらしい部分を抽出
-                json_str = content.strip()
-                if json_str.startswith("```") and json_str.endswith("```"):
-                    json_str = json_str[3:-3].strip()
+                # JSONオブジェクトを探す（{で始まり}で終わる部分）
+                json_start = content.find("{")
+                json_end = content.rfind("}") + 1
+                if json_start >= 0 and json_end > json_start:
+                    json_str = content[json_start:json_end]
+                else:
+                    json_str = content.strip()
+                    if json_str.startswith("```") and json_str.endswith("```"):
+                        json_str = json_str[3:-3].strip()
             
             return json.loads(json_str)
         except (json.JSONDecodeError, ValueError) as e:
