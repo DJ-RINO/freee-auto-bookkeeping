@@ -150,7 +150,8 @@ def integrate_with_main():
     client_id = os.getenv("FREEE_CLIENT_ID")
     client_secret = os.getenv("FREEE_CLIENT_SECRET")
     refresh_token = os.getenv("FREEE_REFRESH_TOKEN")
-    github_token = os.getenv("GITHUB_TOKEN")  # GitHub Actionsで自動的に利用可能
+    # PAT_TOKENが設定されていればそちらを優先
+    github_token = os.getenv("PAT_TOKEN") or os.getenv("GITHUB_TOKEN")
     
     # デバッグ情報を表示
     print("\n[トークン管理システム - 環境変数の確認]")
@@ -197,8 +198,9 @@ def integrate_with_main():
                 print("✅ FREEE_ACCESS_TOKEN を更新しました")
             except Exception as e:
                 print(f"❌ FREEE_ACCESS_TOKEN の更新に失敗: {e}")
+                # エラーでも処理は続行
             
-            # リフレッシュトークンを更新（必ず更新する）
+            # リフレッシュトークンを更新（必ず更新する - 最重要）
             try:
                 token_manager.update_github_secret(repo, "FREEE_REFRESH_TOKEN", new_refresh_token)
                 print("✅ FREEE_REFRESH_TOKEN を更新しました（次回使用のため重要）")
@@ -206,6 +208,11 @@ def integrate_with_main():
                 print(f"❌ FREEE_REFRESH_TOKEN の更新に失敗: {e}")
                 print("⚠️  重要: 手動でGitHub Secretsを更新してください！")
                 print(f"  新しいリフレッシュトークン: {new_refresh_token}")
+                print("\n🚨 次回の自動実行が失敗する可能性があります！")
+                print("📝 以下の手順で手動更新してください:")
+                print("  1. GitHubリポジトリの Settings > Secrets and variables > Actions")
+                print("  2. FREEE_REFRESH_TOKEN を更新")
+                print(f"  3. 値: {new_refresh_token}")
         else:
             print("\n⚠️  GitHub tokenが設定されていないため、Secretsを自動更新できません")
             print("📝 以下のトークンを手動でGitHub Secretsに設定してください:")
