@@ -23,17 +23,43 @@ class FreeeTokenManager:
             "client_secret": self.client_secret
         }
         
-        response = requests.post(self.token_url, data=data)
-        response.raise_for_status()
+        # デバッグ情報を表示（センシティブな情報は隠す）
+        print(f"🔄 トークンリフレッシュを試行中...")
+        print(f"  - Client ID: {self.client_id[:10]}... (length: {len(self.client_id)})")
+        print(f"  - Refresh Token: {refresh_token[:10]}... (length: {len(refresh_token)})")
         
-        token_data = response.json()
-        print("✅ 新しいアクセストークンを取得しました")
-        
-        # 有効期限を計算
-        expires_at = datetime.now() + timedelta(seconds=token_data.get('expires_in', 86400))
-        token_data['expires_at'] = expires_at.isoformat()
-        
-        return token_data
+        try:
+            response = requests.post(self.token_url, data=data)
+            response.raise_for_status()
+            
+            token_data = response.json()
+            print("✅ 新しいアクセストークンを取得しました")
+            
+            # 有効期限を計算
+            expires_at = datetime.now() + timedelta(seconds=token_data.get('expires_in', 86400))
+            token_data['expires_at'] = expires_at.isoformat()
+            
+            return token_data
+        except requests.exceptions.HTTPError as e:
+            print(f"❌ トークンリフレッシュエラー: {e}")
+            print(f"  - ステータスコード: {response.status_code}")
+            try:
+                error_detail = response.json()
+                print(f"  - エラー詳細: {error_detail}")
+                
+                # よくあるエラーの原因を表示
+                if response.status_code == 401:
+                    print("\n⚠️  考えられる原因:")
+                    print("  1. リフレッシュトークンが期限切れ（freeeのリフレッシュトークンは14日間有効）")
+                    print("  2. リフレッシュトークンが既に使用済み（一度使用すると無効になります）")
+                    print("  3. CLIENT_IDまたはCLIENT_SECRETが正しくない")
+                    print("\n📝 対処法:")
+                    print("  1. freee Developersで新しい認証コードを取得してください")
+                    print("  2. 新しいアクセストークンとリフレッシュトークンを取得してください")
+                    print("  3. GitHub Secretsを更新してください")
+            except:
+                print(f"  - レスポンス本文: {response.text}")
+            raise
     
     def update_github_secret(self, repo: str, secret_name: str, secret_value: str):
         """GitHub Secretsを更新"""
@@ -123,6 +149,17 @@ def integrate_with_main():
     client_secret = os.getenv("FREEE_CLIENT_SECRET")
     refresh_token = os.getenv("FREEE_REFRESH_TOKEN")
     github_token = os.getenv("GITHUB_TOKEN")  # GitHub Actionsで自動的に利用可能
+    
+    # デバッグ情報を表示
+    print("\n[トークン管理システム - 環境変数の確認]")
+    print(f"  - FREEE_CLIENT_ID: {'設定済み' if client_id else '未設定'} (length: {len(client_id) if client_id else 0})")
+    print(f"  - FREEE_CLIENT_SECRET: {'設定済み' if client_secret else '未設定'} (length: {len(client_secret) if client_secret else 0})")
+    print(f"  - FREEE_REFRESH_TOKEN: {'設定済み' if refresh_token else '未設定'} (length: {len(refresh_token) if refresh_token else 0})")
+    print(f"  - GITHUB_TOKEN: {'設定済み' if github_token else '未設定'}")
+    
+    # 必須パラメータのチェック
+    if not all([client_id, client_secret, refresh_token]):
+        raise ValueError("必須の環境変数が設定されていません: FREEE_CLIENT_ID, FREEE_CLIENT_SECRET, FREEE_REFRESH_TOKEN")
     
     # トークンマネージャーを初期化
     token_manager = FreeeTokenManager(client_id, client_secret, github_token)
