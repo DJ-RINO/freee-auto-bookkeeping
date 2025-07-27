@@ -644,6 +644,15 @@ def main():
     claude_api_key = os.getenv("FREEE_CLAUDE_API_KEY") or os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY")
     slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")
     
+    # Slack環境変数のデバッグ情報
+    print("\n[Slack設定の確認]")
+    print(f"  - SLACK_WEBHOOK_URL が設定されているか: {'はい' if slack_webhook_url else 'いいえ'}")
+    if slack_webhook_url:
+        print(f"  - URLの長さ: {len(slack_webhook_url)}文字")
+        print(f"  - URLの最初の部分: {slack_webhook_url[:30]}...")
+    else:
+        print("  - 注意: SLACK_WEBHOOK_URL が空です。GitHub Secretsを確認してください。")
+    
     # 必須パラメータのチェック
     if not freee_access_token or not freee_company_id or not claude_api_key:
         print("エラー: 必須の環境変数が設定されていません")
