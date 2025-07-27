@@ -49,19 +49,14 @@ class FreeeClient:
             print(f"  空の履歴で続行します")
             return []
     
-    def get_account_items(self) -> Dict[int, str]:
+    def get_account_items(self) -> List[Dict]:
         """勘定科目一覧を取得"""
         url = f"{self.base_url}/account_items"
         params = {"company_id": self.company_id}
         
         response = requests.get(url, headers=self.headers, params=params)
         response.raise_for_status()
-        
-        # ID -> 名称のマッピングを作成
-        items = {}
-        for item in response.json().get("account_items", []):
-            items[item["id"]] = item["name"]
-        return items
+        return response.json().get("account_items", [])
     
     def get_tax_codes(self) -> Dict[int, str]:
         """税区分一覧を取得"""
@@ -342,9 +337,12 @@ class EnhancedClaudeClient(ClaudeClient):
         """日本の会計ルールをロード"""
         # 勘定科目と税区分の情報を取得
         try:
-            self.account_items = self.freee_client.get_account_items()
+            account_items_list = self.freee_client.get_account_items()
+            # リストから辞書に変換
+            self.account_items = {item['id']: item['name'] for item in account_items_list}
             self.tax_codes = self.freee_client.get_tax_codes()
-        except:
+        except Exception as e:
+            print(f"  会計ルールの取得に失敗しました: {e}")
             self.account_items = {}
             self.tax_codes = {}
         
@@ -508,8 +506,17 @@ def enhanced_main():
     print("=== freee自動仕訳処理を開始します（履歴学習版）===")
     print(f"実行時刻: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
-    # 環境変数の読み込み
-    freee_access_token = os.getenv("FREEE_ACCESS_TOKEN")
+    # トークンの自動更新を試みる
+    try:
+        from token_manager import integrate_with_main
+        freee_access_token = integrate_with_main()
+        print("トークン管理システムを使用しています")
+    except Exception as e:
+        print(f"トークン自動更新をスキップ: {e}")
+        # フォールバック：環境変数から直接取得
+        freee_access_token = os.getenv("FREEE_ACCESS_TOKEN")
+    
+    # その他の環境変数の読み込み
     freee_company_id = int(os.getenv("FREEE_COMPANY_ID", "0"))
     claude_api_key = os.getenv("FREEE_CLAUDE_API_KEY") or os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY")
     slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")
@@ -523,10 +530,26 @@ def enhanced_main():
     else:
         print("  - 注意: SLACK_WEBHOOK_URL が空です。GitHub Secretsを確認してください。")
     
+    # 必須パラメータのチェック
+    if not freee_access_token or not freee_company_id or not claude_api_key:
+        print("エラー: 必須の環境変数が設定されていません")
+        print("FREEE_ACCESS_TOKEN, FREEE_COMPANY_ID, FREEE_CLAUDE_API_KEY を確認してください")
+        return
+    
     # クライアントの初期化
     freee_client = FreeeClient(freee_access_token, freee_company_id)
+    
+    # 勘定科目リストを取得
+    print("\n勘定科目マスタを取得中...")
+    try:
+        account_items = freee_client.get_account_items()
+        print(f"  {len(account_items)}件の勘定科目を取得しました")
+    except Exception as e:
+        print(f"  勘定科目の取得に失敗しました: {e}")
+        account_items = []
+    
     claude_client = EnhancedClaudeClient(claude_api_key, freee_client)
-    slack_notifier = SlackNotifier(slack_webhook_url) if slack_webhook_url else None
+    slack_notifier = SlackNotifier(slack_webhook_url, account_items) if slack_webhook_url else None
     
     # 過去の取引パターンを分析
     print("\n過去の取引パターンを学習中...")
@@ -612,8 +635,12 @@ def analyze_company_patterns(freee_client: FreeeClient) -> Dict:
     top_accounts = sorted(account_counts.keys(), key=lambda x: account_counts[x], reverse=True)
     
     # 勘定科目名を取得
-    account_items = freee_client.get_account_items()
-    top_account_names = [account_items.get(aid, f"ID:{aid}") for aid in top_accounts]
+    try:
+        account_items_list = freee_client.get_account_items()
+        account_items = {item['id']: item['name'] for item in account_items_list}
+        top_account_names = [account_items.get(aid, f"ID:{aid}") for aid in top_accounts]
+    except:
+        top_account_names = [f"ID:{aid}" for aid in top_accounts]
     
     return {
         "total_deals": len(deals),
