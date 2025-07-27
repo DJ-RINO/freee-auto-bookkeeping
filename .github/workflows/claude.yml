@@ -34,6 +34,8 @@ jobs:
             - name: Run Claude Code
               id: claude
               uses: anthropics/claude-code-action@main
+              env:
+                  ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
               with:
                   anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
                   github_token: ${{ secrets.GITHUB_TOKEN }}
