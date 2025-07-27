@@ -374,7 +374,7 @@ class EnhancedClaudeClient(ClaudeClient):
 
 必ずJSON形式のみで回答してください。説明や理由は含めないでください。
 以下の形式で出力してください：
-{"account_item_id": 数値, "tax_code": 数値, "partner_name": "文字列", "confidence": 0.0〜1.0}
+{{"account_item_id": 数値, "tax_code": 数値, "partner_name": "文字列", "confidence": 0.0〜1.0}}
 
 confidence は 0.0〜1.0 の値で、推定の確信度を表します。
 完全に確実な場合のみ 1.0 を設定してください。
