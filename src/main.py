@@ -244,7 +244,7 @@ confidence は 0.0〜1.0 の値で、推定の確信度を表します。
         # 主要な勘定科目のみ表示（収益・費用科目を優先）
         formatted = "利用可能な勘定科目:\n"
         for item in self.account_items[:30]:  # 最大30件
-            formatted += f"- {item['id']}: {item['name']}\n"
+            formatted += f"- {item.get('id')}: {item.get('name')}\n"
         return formatted
     
     def analyze_transaction(self, txn: Dict) -> Dict:
@@ -314,8 +314,23 @@ confidence は 0.0〜1.0 の値で、推定の確信度を表します。
 class SlackNotifier:
     """Slack通知クライアント"""
     
-    def __init__(self, webhook_url: str):
+    def __init__(self, webhook_url: str, account_items: List[Dict] = None):
         self.webhook_url = webhook_url
+        self.account_items = account_items or []
+        
+        # 勘定科目IDから名前へのマッピングを作成
+        self.account_item_names = {}
+        for item in self.account_items:
+            self.account_item_names[item.get('id')] = item.get('name', f"ID: {item.get('id')}")
+    
+    def _get_tax_name(self, tax_code: int) -> str:
+        """税区分コードから名前を取得"""
+        tax_names = {
+            0: "非課税",
+            21: "課税仕入 10%",
+            24: "課税仕入 8%（軽減）"
+        }
+        return tax_names.get(tax_code, f"コード: {tax_code}")
     
     def send_confirmation(self, txn: Dict, analysis: Dict) -> bool:
         """確認が必要な取引をSlackに通知"""
@@ -342,8 +357,8 @@ class SlackNotifier:
                 {
                     "type": "section",
                     "fields": [
-                        {"type": "mrkdwn", "text": f"*推定勘定科目ID:* {analysis['account_item_id']}"},
-                        {"type": "mrkdwn", "text": f"*推定税区分:* {analysis['tax_code']}"}
+                        {"type": "mrkdwn", "text": f"*推定勘定科目:* {self.account_item_names.get(analysis['account_item_id'], '不明')} (ID: {analysis['account_item_id']})"},
+                        {"type": "mrkdwn", "text": f"*推定税区分:* {self._get_tax_name(analysis['tax_code'])} (コード: {analysis['tax_code']})"}
                     ]
                 },
                 {
@@ -640,12 +655,18 @@ def main():
     try:
         account_items = freee_client.get_account_items()
         print(f"  {len(account_items)}件の勘定科目を取得しました")
+        
+        # 主要な勘定科目をデバッグ表示（最初の10件）
+        if account_items:
+            print("  主要な勘定科目:")
+            for item in account_items[:10]:
+                print(f"    - {item.get('id')}: {item.get('name')}")
     except Exception as e:
         print(f"  勘定科目の取得に失敗しました: {e}")
         account_items = []
     
     claude_client = ClaudeClient(claude_api_key, account_items)
-    slack_notifier = SlackNotifier(slack_webhook_url) if slack_webhook_url else None
+    slack_notifier = SlackNotifier(slack_webhook_url, account_items) if slack_webhook_url else None
     
     try:
         # 未仕訳明細の取得
