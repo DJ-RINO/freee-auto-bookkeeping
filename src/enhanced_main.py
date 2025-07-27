@@ -4,6 +4,8 @@ import requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from dotenv import load_dotenv
+from collections import defaultdict
+import re
 
 load_dotenv()
 
@@ -68,26 +70,80 @@ class FreeeClient:
     
     def analyze_historical_patterns(self, description: str, amount: int) -> List[Dict]:
         """類似する過去の取引パターンを分析"""
-        historical_deals = self.get_historical_deals(days=365, limit=500)
+        historical_deals = self.get_historical_deals(days=365, limit=1000)
         
         similar_deals = []
+        description_upper = description.upper()
+        
+        # 特定のキーワードを抽出（CURSOR、ANTHROPIC等）
+        keywords = self._extract_keywords(description_upper)
+        
         for deal in historical_deals:
             # 取引詳細を確認
             if deal.get("details"):
                 for detail in deal["details"]:
-                    # 金額の類似性をチェック
                     detail_amount = detail.get("amount", 0)
-                    if abs(detail_amount - abs(amount)) / max(abs(amount), 1) < 0.2:  # 20%以内の差
+                    partner_name = self._get_partner_name(deal.get("partner_id"))
+                    ref_number = deal.get("ref_number", "").upper()
+                    
+                    # マッチング条件：
+                    # 1. 金額が完全一致
+                    # 2. 金額が近い（20%以内）かつキーワードが含まれる
+                    # 3. 取引先名に含まれるキーワードがある
+                    
+                    is_amount_match = abs(detail_amount) == abs(amount)
+                    is_amount_similar = abs(detail_amount - abs(amount)) / max(abs(amount), 1) < 0.2
+                    is_keyword_match = any(kw in partner_name.upper() for kw in keywords) if partner_name else False
+                    is_ref_match = any(kw in ref_number for kw in keywords) if ref_number else False
+                    
+                    score = 0
+                    if is_amount_match:
+                        score += 50
+                    elif is_amount_similar:
+                        score += 20
+                    
+                    if is_keyword_match or is_ref_match:
+                        score += 30
+                    
+                    if score > 0:
                         similar_deals.append({
                             "date": deal.get("issue_date"),
                             "amount": detail_amount,
-                            "description": deal.get("ref_number", ""),
+                            "description": ref_number,
                             "account_item_id": detail.get("account_item_id"),
                             "tax_code": detail.get("tax_code"),
-                            "partner_name": self._get_partner_name(deal.get("partner_id"))
+                            "partner_name": partner_name,
+                            "score": score
                         })
         
+        # スコアの高い順にソート
+        similar_deals.sort(key=lambda x: x["score"], reverse=True)
         return similar_deals[:10]  # 上位10件を返す
+    
+    def _extract_keywords(self, description: str) -> List[str]:
+        """説明文からキーワードを抽出"""
+        # 一般的な省略形と正式名のマッピング
+        keyword_mapping = {
+            "ANTHROPIC": ["ANTHROPIC", "アンソロピック", "CLAUDE"],
+            "CURSOR": ["CURSOR", "カーソル"],
+            "SLACK": ["SLACK", "スラック"],
+            "ZOOM": ["ZOOM", "ズーム"],
+            "JAPAN AIRLINES": ["JAL", "日本航空", "JAPAN AIRLINES"],
+            "SOLASEED": ["SOLASEED", "ソラシド"],
+            "ABEMATV": ["ABEMA", "アベマ"],
+        }
+        
+        keywords = []
+        for key, values in keyword_mapping.items():
+            if any(v in description for v in values):
+                keywords.extend(values)
+        
+        # 説明文中の英数字の単語も抽出
+        import re
+        words = re.findall(r'[A-Z][A-Z0-9]+', description)
+        keywords.extend(words)
+        
+        return list(set(keywords))  # 重複を除去
     
     def _get_partner_name(self, partner_id: Optional[int]) -> str:
         """取引先IDから名称を取得"""
