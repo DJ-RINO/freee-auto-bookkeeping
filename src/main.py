@@ -186,8 +186,17 @@ confidence は 0.0〜1.0 の値で、推定の確信度を表します。
             ]
         }
         
-        response = requests.post(self.base_url, headers=self.headers, json=data)
-        response.raise_for_status()
+        try:
+            response = requests.post(self.base_url, headers=self.headers, json=data)
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            print(f"Claude API Error: {e}")
+            print(f"Response status code: {response.status_code}")
+            print(f"Response headers: {dict(response.headers)}")
+            print(f"Response body: {response.text}")
+            print(f"Request URL: {self.base_url}")
+            print(f"Request headers (without API key): {{'x-api-key': '***', 'anthropic-version': self.headers['anthropic-version'], 'content-type': self.headers['content-type']}}")
+            raise
         
         # レスポンスからJSONを抽出
         content = response.json()["content"][0]["text"]
@@ -376,6 +385,8 @@ def process_wallet_txn(txn: Dict, freee_client: FreeeClient,
 
     except Exception as e:
         print(f"  エラー: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return {
             "txn_id": txn["id"],
             "status": "error",
@@ -423,6 +434,13 @@ def main():
         print("エラー: 必須の環境変数が設定されていません")
         print("FREEE_ACCESS_TOKEN, FREEE_COMPANY_ID, FREEE_CLAUDE_API_KEY を確認してください")
         return []
+    
+    # Claude API キーのデバッグ情報
+    print(f"\n[Claude API設定]")
+    print(f"  - APIキー設定: あり")
+    print(f"  - キーの最初の10文字: {claude_api_key[:10]}...")
+    print(f"  - キーの長さ: {len(claude_api_key)}文字")
+    print(f"  - キーの形式: {'✓ Anthropic形式' if claude_api_key.startswith('sk-ant-') else '? 不明な形式'}")
     
     # DRY_RUNモードの表示
     if os.getenv("DRY_RUN", "false").lower() == "true":
