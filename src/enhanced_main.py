@@ -36,12 +36,18 @@ class FreeeClient:
             "company_id": self.company_id,
             "start_issue_date": start_date.strftime("%Y-%m-%d"),
             "end_issue_date": end_date.strftime("%Y-%m-%d"),
-            "limit": limit
+            "limit": limit,
+            "offset": 0
         }
         
-        response = requests.get(url, headers=self.headers, params=params)
-        response.raise_for_status()
-        return response.json().get("deals", [])
+        try:
+            response = requests.get(url, headers=self.headers, params=params)
+            response.raise_for_status()
+            return response.json().get("deals", [])
+        except requests.exceptions.HTTPError as e:
+            print(f"  警告: 過去の取引履歴の取得に失敗しました: {e}")
+            print(f"  空の履歴で続行します")
+            return []
     
     def get_account_items(self) -> Dict[int, str]:
         """勘定科目一覧を取得"""
@@ -73,7 +79,7 @@ class FreeeClient:
     
     def analyze_historical_patterns(self, description: str, amount: int) -> List[Dict]:
         """類似する過去の取引パターンを分析"""
-        historical_deals = self.get_historical_deals(days=365, limit=1000)
+        historical_deals = self.get_historical_deals(days=90, limit=100)  # 過去90日、最大100件に制限
         
         similar_deals = []
         description_upper = description.upper()
@@ -583,7 +589,7 @@ def enhanced_main():
 
 def analyze_company_patterns(freee_client: FreeeClient) -> Dict:
     """会社固有の取引パターンを分析"""
-    deals = freee_client.get_historical_deals(days=365, limit=1000)
+    deals = freee_client.get_historical_deals(days=90, limit=100)  # 過去90日、最大100件に制限
     
     partner_counts = defaultdict(int)
     account_counts = defaultdict(int)
