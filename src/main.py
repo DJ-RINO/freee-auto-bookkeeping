@@ -113,12 +113,21 @@ class FreeeClient:
         response = requests.post(create_url, headers=self.headers, json=data)
         response.raise_for_status()
         return response.json()["partner"]["id"]
+    
+    def get_account_items(self) -> List[Dict]:
+        """勘定科目一覧を取得"""
+        url = f"{self.base_url}/account_items"
+        params = {"company_id": self.company_id}
+        
+        response = requests.get(url, headers=self.headers, params=params)
+        response.raise_for_status()
+        return response.json().get("account_items", [])
 
 
 class ClaudeClient:
     """Claude API クライアント"""
     
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, account_items: List[Dict] = None):
         self.api_key = api_key
         self.base_url = "https://api.anthropic.com/v1/messages"
         self.headers = {
@@ -126,6 +135,9 @@ class ClaudeClient:
             "anthropic-version": "2023-06-01",
             "content-type": "application/json"
         }
+        
+        # 勘定科目リストを受け取る
+        self.account_items = account_items or []
         
         # Few-shot examples for system prompt
         self.system_prompt = """
@@ -149,12 +161,7 @@ class ClaudeClient:
 例5: {"description": "給与振込", "amount": -250000}
 → {"account_item_id": 650, "tax_code": 0, "partner_name": "従業員", "confidence": 0.88}
 
-勘定科目ID参考:
-- 101: 売上高
-- 604: 通信費
-- 607: 旅費交通費
-- 650: 給料手当
-- 831: 雑費
+{self._format_account_items()}
 
 税区分参考:
 - 0: 非課税
@@ -168,6 +175,22 @@ class ClaudeClient:
 confidence は 0.0〜1.0 の値で、推定の確信度を表します。
 完全に確実な場合のみ 1.0 を設定してください。
 """
+    
+    def _format_account_items(self) -> str:
+        """勘定科目リストをフォーマット"""
+        if not self.account_items:
+            return """勘定科目ID参考:
+- 101: 売上高
+- 604: 通信費  
+- 607: 旅費交通費
+- 650: 給料手当
+- 831: 雑費"""
+        
+        # 主要な勘定科目のみ表示（収益・費用科目を優先）
+        formatted = "利用可能な勘定科目:\n"
+        for item in self.account_items[:30]:  # 最大30件
+            formatted += f"- {item['id']}: {item['name']}\n"
+        return formatted
     
     def analyze_transaction(self, txn: Dict) -> Dict:
         """取引を分析して勘定科目等を推定"""
@@ -460,7 +483,17 @@ def main():
     
     # クライアントの初期化
     freee_client = FreeeClient(freee_access_token, freee_company_id)
-    claude_client = ClaudeClient(claude_api_key)
+    
+    # 勘定科目リストを取得
+    print("勘定科目マスタを取得中...")
+    try:
+        account_items = freee_client.get_account_items()
+        print(f"  {len(account_items)}件の勘定科目を取得しました")
+    except Exception as e:
+        print(f"  勘定科目の取得に失敗しました: {e}")
+        account_items = []
+    
+    claude_client = ClaudeClient(claude_api_key, account_items)
     slack_notifier = SlackNotifier(slack_webhook_url) if slack_webhook_url else None
     
     try:
