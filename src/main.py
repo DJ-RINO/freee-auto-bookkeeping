@@ -347,6 +347,16 @@ class SlackNotifier:
                     ]
                 },
                 {
+                    "type": "divider"
+                },
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f"⚠️ *要対応*: この取引は自動登録されていません。\n\n*取引ID:* `{txn['id']}`\n\n以下のいずれかの方法で手動登録してください：\n1. freee管理画面から「取引の登録」→「未仕訳明細」で処理\n2. 仕訳ルールを追加して次回から自動化\n3. 信頼度向上のため、過去の類似取引を確認"
+                    }
+                },
+                {
                     "type": "actions",
                     "elements": [
                         {
@@ -383,6 +393,12 @@ class SlackNotifier:
             if r["status"] == "error":
                 error_details.append(f"• TxnID {r['txn_id']}: {r.get('error', 'Unknown error')}")
         
+        # 未処理取引の詳細を収集
+        unconfirmed_details = []
+        for r in results:
+            if r["status"] == "needs_confirmation":
+                unconfirmed_details.append(f"• TxnID `{r['txn_id']}`: 信頼度 {r.get('analysis', {}).get('confidence', 0):.2f}")
+        
         message = {
             "text": f"仕訳処理完了: 登録 {registered}件, 要確認 {needs_confirmation}件, エラー {errors}件",
             "blocks": [
@@ -413,6 +429,23 @@ class SlackNotifier:
                 "text": {
                     "type": "mrkdwn",
                     "text": f"*エラー詳細:*\n{error_text}"
+                }
+            })
+        
+        # 未処理取引がある場合は追加
+        if unconfirmed_details:
+            unconfirmed_text = "\n".join(unconfirmed_details[:10])  # 最大10件まで
+            if len(unconfirmed_details) > 10:
+                unconfirmed_text += f"\n... 他 {len(unconfirmed_details) - 10}件"
+            
+            message["blocks"].append({
+                "type": "divider"
+            })
+            message["blocks"].append({
+                "type": "section",
+                "text": {
+                    "type": "mrkdwn",
+                    "text": f"*⚠️ 要手動処理取引:*\n{unconfirmed_text}\n\n👉 freee管理画面の「取引の登録」→「未仕訳明細」から手動登録してください。"
                 }
             })
         
@@ -524,9 +557,33 @@ def save_results(results: List[Dict]):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"results_{timestamp}.json"
     
+    # 統計情報を計算
+    stats = {
+        "total": len(results),
+        "registered": len([r for r in results if r["status"] == "registered"]),
+        "invoice_matched": len([r for r in results if r["status"] == "invoice_matched"]),
+        "needs_confirmation": len([r for r in results if r["status"] == "needs_confirmation"]),
+        "errors": len([r for r in results if r["status"] == "error"]),
+        "dry_run": len([r for r in results if r["status"] == "dry_run"]),
+        "dry_run_invoice_matched": len([r for r in results if r["status"] == "dry_run_invoice_matched"])
+    }
+    
+    # 要手動処理の取引IDリスト
+    unprocessed_txn_ids = [
+        r["txn_id"] for r in results 
+        if r["status"] in ["needs_confirmation", "error"]
+    ]
+    
     with open(filename, "w", encoding="utf-8") as f:
         json.dump({
             "timestamp": datetime.now().isoformat(),
+            "environment": {
+                "dry_run": os.getenv("DRY_RUN", "false"),
+                "always_notify": os.getenv("ALWAYS_NOTIFY", "false"),
+                "confidence_threshold": CONFIDENCE_THRESHOLD
+            },
+            "statistics": stats,
+            "unprocessed_transaction_ids": unprocessed_txn_ids,
             "results": results
         }, f, ensure_ascii=False, indent=2)
     
