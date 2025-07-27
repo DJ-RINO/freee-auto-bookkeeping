@@ -332,6 +332,15 @@ class SlackNotifier:
         }
         return tax_names.get(tax_code, f"コード: {tax_code}")
     
+    def _get_action_message(self, txn: Dict, analysis: Dict) -> str:
+        """アクションメッセージを生成"""
+        is_dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
+        
+        if is_dry_run:
+            return f"📝 *DRY_RUNモード*: この取引は確認のみで登録されません。\n\n*取引ID:* `{txn['id']}`\n\n本番実行時の推定内容を確認してください。\n問題がある場合は、仕訳ルールの追加や学習データの改善をご検討ください。"
+        else:
+            return f"⚠️ *要対応*: この取引は自動登録されていません。\n\n*取引ID:* `{txn['id']}`\n\n以下のいずれかの方法で手動登録してください：\n1. freee管理画面から「取引の登録」→「未仕訳明細」で処理\n2. 仕訳ルールを追加して次回から自動化\n3. 信頼度向上のため、過去の類似取引を確認"
+    
     def send_confirmation(self, txn: Dict, analysis: Dict) -> bool:
         """確認が必要な取引をSlackに通知"""
         
@@ -368,7 +377,7 @@ class SlackNotifier:
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"⚠️ *要対応*: この取引は自動登録されていません。\n\n*取引ID:* `{txn['id']}`\n\n以下のいずれかの方法で手動登録してください：\n1. freee管理画面から「取引の登録」→「未仕訳明細」で処理\n2. 仕訳ルールを追加して次回から自動化\n3. 信頼度向上のため、過去の類似取引を確認"
+                        "text": self._get_action_message(txn, analysis)
                     }
                 },
                 {
@@ -515,6 +524,15 @@ def process_wallet_txn(txn: Dict, freee_client: FreeeClient,
         # DRY_RUNモードのチェック
         if os.getenv("DRY_RUN", "false").lower() == "true":
             print(f"  [DRY_RUN] 登録をスキップします")
+            
+            # DRY_RUNモードでも通知を送る条件
+            # 1. 信頼度が低い取引
+            # 2. ALWAYS_NOTIFYがtrueの場合は全て
+            if slack_notifier and (analysis["confidence"] < CONFIDENCE_THRESHOLD or ALWAYS_NOTIFY):
+                print(f"  信頼度{analysis['confidence']:.2f}の取引をSlackに通知します")
+                sent = slack_notifier.send_confirmation(txn, analysis)
+                print(f"  Slack通知送信結果: {sent}")
+            
             return {
                 "txn_id": txn["id"],
                 "status": "dry_run",
@@ -698,8 +716,8 @@ def main():
         # 結果の保存
         save_results(results)
         
-        # サマリーの送信
-        if slack_notifier and not os.getenv("DRY_RUN", "false").lower() == "true":
+        # サマリーの送信（DRY_RUNモードでも送信）
+        if slack_notifier:
             print("\nSlackに結果を送信中...")
             slack_notifier.send_summary(results)
         
