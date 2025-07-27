@@ -23,6 +23,9 @@ on:
 jobs:
   process-transactions:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write  # GitHub Secretsの更新に必要
     
     steps:
     - uses: actions/checkout@v4

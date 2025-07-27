@@ -67,6 +67,8 @@ class FreeeTokenManager:
             print("⚠️  GitHub tokenが設定されていないため、Secretsを更新できません")
             return False
         
+        print(f"  - {secret_name} を更新中...")
+        
         # リポジトリの公開鍵を取得
         public_key_url = f"https://api.github.com/repos/{repo}/actions/secrets/public-key"
         headers = {
@@ -172,18 +174,47 @@ def integrate_with_main():
     
     if new_tokens:
         # 新しいトークンを取得した場合
+        print("\n🔄 トークンが更新されました")
         access_token = new_tokens['access_token']
-        new_refresh_token = new_tokens.get('refresh_token', refresh_token)
+        new_refresh_token = new_tokens.get('refresh_token')
+        
+        if not new_refresh_token:
+            print("⚠️  警告: 新しいリフレッシュトークンが返されませんでした")
+            print("  古いリフレッシュトークンを再利用しますが、次回失敗する可能性があります")
+            new_refresh_token = refresh_token
+        else:
+            print(f"✅ 新しいリフレッシュトークンを取得: {new_refresh_token[:10]}...")
         
         # GitHub Secretsを更新
         repo = os.getenv("GITHUB_REPOSITORY", "DJ-RINO/freee-auto-bookkeeping")
-        token_manager.update_github_secret(repo, "FREEE_ACCESS_TOKEN", access_token)
         
-        if new_refresh_token != refresh_token:
-            token_manager.update_github_secret(repo, "FREEE_REFRESH_TOKEN", new_refresh_token)
+        if github_token:
+            print(f"\n📝 GitHub Secretsを更新中 (リポジトリ: {repo})")
+            
+            # アクセストークンを更新
+            try:
+                token_manager.update_github_secret(repo, "FREEE_ACCESS_TOKEN", access_token)
+                print("✅ FREEE_ACCESS_TOKEN を更新しました")
+            except Exception as e:
+                print(f"❌ FREEE_ACCESS_TOKEN の更新に失敗: {e}")
+            
+            # リフレッシュトークンを更新（必ず更新する）
+            try:
+                token_manager.update_github_secret(repo, "FREEE_REFRESH_TOKEN", new_refresh_token)
+                print("✅ FREEE_REFRESH_TOKEN を更新しました（次回使用のため重要）")
+            except Exception as e:
+                print(f"❌ FREEE_REFRESH_TOKEN の更新に失敗: {e}")
+                print("⚠️  重要: 手動でGitHub Secretsを更新してください！")
+                print(f"  新しいリフレッシュトークン: {new_refresh_token}")
+        else:
+            print("\n⚠️  GitHub tokenが設定されていないため、Secretsを自動更新できません")
+            print("📝 以下のトークンを手動でGitHub Secretsに設定してください:")
+            print(f"  FREEE_ACCESS_TOKEN: {access_token}")
+            print(f"  FREEE_REFRESH_TOKEN: {new_refresh_token}")
         
-        # ローカルバックアップ
+        # ローカルバックアップ（失敗に備えて）
         token_manager.save_tokens_locally(new_tokens)
+        print(f"\n💾 バックアップを .tokens.json に保存しました")
     
     return access_token
 
