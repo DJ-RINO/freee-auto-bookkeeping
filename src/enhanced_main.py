@@ -88,7 +88,7 @@ class FreeeClient:
                 for detail in deal["details"]:
                     detail_amount = detail.get("amount", 0)
                     partner_name = self._get_partner_name(deal.get("partner_id"))
-                    ref_number = deal.get("ref_number", "").upper()
+                    ref_number = (deal.get("ref_number") or "").upper()
                     
                     # マッチング条件：
                     # 1. 金額が完全一致
@@ -97,7 +97,7 @@ class FreeeClient:
                     
                     is_amount_match = abs(detail_amount) == abs(amount)
                     is_amount_similar = abs(detail_amount - abs(amount)) / max(abs(amount), 1) < 0.2
-                    is_keyword_match = any(kw in partner_name.upper() for kw in keywords) if partner_name else False
+                    is_keyword_match = any(kw in (partner_name or "").upper() for kw in keywords) if partner_name else False
                     is_ref_match = any(kw in ref_number for kw in keywords) if ref_number else False
                     
                     score = 0

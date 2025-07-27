@@ -322,6 +322,25 @@ class SlackNotifier:
         self.account_item_names = {}
         for item in self.account_items:
             self.account_item_names[item.get('id')] = item.get('name', f"ID: {item.get('id')}")
+        
+        # デフォルトの勘定科目名を設定（APIで取得できない場合の保険）
+        default_account_names = {
+            101: "売上高",
+            604: "通信費",
+            607: "旅費交通費",
+            831: "雑費",
+            650: "給料手当"
+        }
+        
+        # APIで取得できなかった場合はデフォルト値を使用
+        if not self.account_item_names:
+            print("⚠️  勘定科目マスタが空のため、デフォルト値を使用します")
+            self.account_item_names = default_account_names
+        else:
+            # 既存のマッピングにデフォルト値を追加（存在しない場合のみ）
+            for id, name in default_account_names.items():
+                if id not in self.account_item_names:
+                    self.account_item_names[id] = name
     
     def _get_tax_name(self, tax_code: int) -> str:
         """税区分コードから名前を取得"""
