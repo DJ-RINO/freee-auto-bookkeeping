@@ -181,6 +181,21 @@ freee-auto-bookkeeping/
 
 MIT License
 
+## 高度な機能
+
+### 過去の取引履歴を活用する拡張モード
+
+GitHub Secretsで`USE_ENHANCED_MODE=true`を設定すると、過去の取引履歴を参照してより正確な仕訳を行います。
+
+### 常時Slack通知モード
+
+GitHub Secretsで`ALWAYS_NOTIFY=true`を設定すると、信頼度90%以上の取引も確認のためSlackに通知されます。
+
+### Slackインタラクティブ機能（実験的）
+
+`src/slack_interactive_handler.py`を使用すると、Slack上で直接仕訳内容を修正して登録できます。
+※ 別途Webサーバーの設定が必要です。
+
 ## Claude Code Action (CCA) 対応
 
 このリポジトリはClaude Code Actionに対応しており、以下の機能が利用できます：

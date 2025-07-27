@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 CONFIDENCE_THRESHOLD = 0.9  # 90%以上で自動登録
+ALWAYS_NOTIFY = os.getenv("ALWAYS_NOTIFY", "false").lower() == "true"  # 常にSlack通知するオプション
 
 class FreeeClient:
     """freee API クライアント"""
@@ -472,8 +473,13 @@ def process_wallet_txn(txn: Dict, freee_client: FreeeClient,
                 "analysis": analysis
             }
 
-        # 90%以上は自動登録
+        # 90%以上は自動登録（ALWAYS_NOTIFYがtrueの場合は通知も送る）
         if analysis["confidence"] >= CONFIDENCE_THRESHOLD:
+            if ALWAYS_NOTIFY and slack_notifier:
+                print(f"  信頼度{analysis['confidence']:.2f}の取引をSlackに通知します（確認用）")
+                sent = slack_notifier.send_confirmation(txn, analysis)
+                print(f"  Slack通知送信結果: {sent}")
+            
             print(f"  信頼度90%以上のため自動登録を実行中...")
             result = freee_client.create_deal(
                 wallet_txn_id=txn["id"],

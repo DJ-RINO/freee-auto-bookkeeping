@@ -58,9 +58,17 @@ jobs:
         GITHUB_REPOSITORY: ${{ github.repository }}
         DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         TRANSACTION_LIMIT: ${{ github.event.inputs.limit || '100' }}
+        ALWAYS_NOTIFY: ${{ secrets.ALWAYS_NOTIFY || 'false' }}
+        USE_ENHANCED_MODE: ${{ secrets.USE_ENHANCED_MODE || 'false' }}
       run: |
         pip install pynacl  # トークン暗号化用
-        python src/main.py
+        if [ "$USE_ENHANCED_MODE" = "true" ]; then
+          echo "過去の取引履歴を活用する拡張モードで実行します"
+          python src/enhanced_main.py
+        else
+          echo "標準モードで実行します"
+          python src/main.py
+        fi
     
     - name: Upload results
       if: always()
