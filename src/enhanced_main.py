@@ -6,6 +6,7 @@ from typing import Dict, List, Optional
 from dotenv import load_dotenv
 from collections import defaultdict
 import re
+from custom_rules import apply_custom_rules, get_rule_explanation
 
 load_dotenv()
 
@@ -615,11 +616,16 @@ def enhanced_main():
     dry_run = len([r for r in results if r["status"] == "dry_run"])
     dry_run_invoice = len([r for r in results if r["status"] == "dry_run_invoice_matched"])
     
+    # カスタムルール適用の統計
+    rule_matched = len([r for r in results if r.get("analysis", {}).get("matched_rule")])
+    
     print("\n=== 処理完了 ===")
     print(f"  自動登録: {registered}件")
     print(f"  請求書消込: {invoice_matched}件")
     print(f"  要確認: {needs_confirmation}件")
     print(f"  エラー: {errors}件")
+    if rule_matched > 0:
+        print(f"  カスタムルール適用: {rule_matched}件")
     if dry_run > 0 or dry_run_invoice > 0:
         print(f"  DRY_RUN: {dry_run + dry_run_invoice}件 (うち請求書消込: {dry_run_invoice}件)")
 
@@ -708,10 +714,15 @@ class SlackNotifier:
         """アクションメッセージを生成"""
         is_dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
         
+        # ルール適用情報を追加
+        rule_info = ""
+        if 'matched_rule' in analysis:
+            rule_info = f"\n\n*適用ルール:* {get_rule_explanation(analysis['matched_rule'])}"
+        
         if is_dry_run:
-            return f"📝 *DRY_RUNモード*: この取引は確認のみで登録されません。\n\n*取引ID:* `{txn['id']}`\n\n本番実行時の推定内容を確認してください。\n問題がある場合は、仕訳ルールの追加や学習データの改善をご検討ください。"
+            return f"📝 *DRY_RUNモード*: この取引は確認のみで登録されません。\n\n*取引ID:* `{txn['id']}`{rule_info}\n\n本番実行時の推定内容を確認してください。\n問題がある場合は、仕訳ルールの追加や学習データの改善をご検討ください。"
         else:
-            return f"⚠️ *要対応*: この取引は自動登録されていません。\n\n*取引ID:* `{txn['id']}`\n\n以下のいずれかの方法で手動登録してください：\n1. freee管理画面から「取引の登録」→「未仕訳明細」で処理\n2. 仕訳ルールを追加して次回から自動化\n3. 信頼度向上のため、過去の類似取引を確認"
+            return f"⚠️ *要対応*: この取引は自動登録されていません。\n\n*取引ID:* `{txn['id']}`{rule_info}\n\n以下のいずれかの方法で手動登録してください：\n1. freee管理画面から「取引の登録」→「未仕訳明細」で処理\n2. 仕訳ルールを追加して次回から自動化\n3. 信頼度向上のため、過去の類似取引を確認"
     
     def send_confirmation(self, txn: Dict, analysis: Dict) -> bool:
         """確認が必要な取引をSlackに通知"""
@@ -891,7 +902,24 @@ def process_enhanced_wallet_txn(txn: Dict, freee_client: FreeeClient,
         # 請求書とマッチしない場合は、通常の分析処理（過去の履歴を参照）
         print(f"  過去の取引履歴を参照して分析中: {txn.get('description', '')}")
         analysis = claude_client.analyze_transaction_with_history(txn)
-        print(f"  分析結果: 信頼度={analysis['confidence']:.2f}")
+        print(f"  Claude推論結果: 信頼度={analysis['confidence']:.2f}, 勘定科目={analysis.get('account_item_id')}, 税区分={analysis.get('tax_code')}")
+        
+        # カスタムルールを適用
+        original_confidence = analysis['confidence']
+        analysis = apply_custom_rules(
+            txn.get('description', ''),
+            txn.get('amount', 0),
+            analysis
+        )
+        
+        # ルール適用の結果をログ出力
+        if 'matched_rule' in analysis:
+            print(f"  ✅ カスタムルール適用: {get_rule_explanation(analysis['matched_rule'])}")
+            print(f"  信頼度: {original_confidence:.2f} → {analysis['confidence']:.2f}")
+        elif analysis['confidence'] != original_confidence:
+            print(f"  📝 キーワード/金額ルールで信頼度調整: {original_confidence:.2f} → {analysis['confidence']:.2f}")
+        
+        print(f"  最終判定: 信頼度={analysis['confidence']:.2f}, 勘定科目={analysis.get('account_item_id')}, 税区分={analysis.get('tax_code')}")
 
         # DRY_RUNモードのチェック
         if os.getenv("DRY_RUN", "false").lower() == "true":
@@ -911,14 +939,14 @@ def process_enhanced_wallet_txn(txn: Dict, freee_client: FreeeClient,
                 "analysis": analysis
             }
 
-        # 90%以上は自動登録（ALWAYS_NOTIFYがtrueの場合は通知も送る）
+        # 閾値以上は自動登録（ALWAYS_NOTIFYがtrueの場合は通知も送る）
         if analysis["confidence"] >= CONFIDENCE_THRESHOLD:
             if ALWAYS_NOTIFY and slack_notifier:
                 print(f"  信頼度{analysis['confidence']:.2f}の取引をSlackに通知します（確認用）")
                 sent = slack_notifier.send_confirmation(txn, analysis)
                 print(f"  Slack通知送信結果: {sent}")
             
-            print(f"  信頼度90%以上のため自動登録を実行中...")
+            print(f"  信頼度{CONFIDENCE_THRESHOLD:.0%}以上のため自動登録を実行中...")
             result = freee_client.create_deal(
                 wallet_txn_id=txn["id"],
                 account_item_id=analysis["account_item_id"],
@@ -935,8 +963,8 @@ def process_enhanced_wallet_txn(txn: Dict, freee_client: FreeeClient,
                 "analysis": analysis
             }
         else:
-            # 90%未満は全てSlack通知
-            print(f"  信頼度90%未満のためSlack通知を送信します（信頼度: {analysis['confidence']:.2f}）")
+            # 閾値未満は全てSlack通知
+            print(f"  信頼度{CONFIDENCE_THRESHOLD:.0%}未満のためSlack通知を送信します（信頼度: {analysis['confidence']:.2f}）")
             if slack_notifier:
                 sent = slack_notifier.send_confirmation(txn, analysis)
                 print(f"  Slack通知送信結果: {sent}")
