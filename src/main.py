@@ -122,6 +122,60 @@ class FreeeClient:
         response = requests.get(url, headers=self.headers, params=params)
         response.raise_for_status()
         return response.json().get("account_items", [])
+    
+    def get_unpaid_invoices(self) -> List[Dict]:
+        """未消込の請求書を取得"""
+        url = f"{self.base_url}/invoices"
+        params = {
+            "company_id": self.company_id,
+            "payment_status": "unsettled",  # 未決済のみ
+            "limit": 100
+        }
+        
+        response = requests.get(url, headers=self.headers, params=params)
+        response.raise_for_status()
+        return response.json().get("invoices", [])
+    
+    def match_with_invoice(self, wallet_txn: Dict, invoices: List[Dict]) -> Optional[Dict]:
+        """入金と請求書をマッチング"""
+        txn_amount = wallet_txn.get("amount", 0)
+        txn_description = wallet_txn.get("description", "").upper()
+        
+        # 入金（プラス金額）のみ処理
+        if txn_amount <= 0:
+            return None
+        
+        for invoice in invoices:
+            # 金額が一致するかチェック
+            if invoice.get("total_amount") == txn_amount:
+                # 取引先名が摘要に含まれるかチェック
+                partner_name = invoice.get("partner_display_name", "").upper()
+                if partner_name and partner_name in txn_description:
+                    return invoice
+                
+                # 請求書番号が摘要に含まれるかチェック  
+                invoice_number = invoice.get("invoice_number", "")
+                if invoice_number and invoice_number in txn_description:
+                    return invoice
+        
+        return None
+    
+    def create_invoice_payment(self, wallet_txn_id: int, invoice_id: int, amount: int) -> Dict:
+        """請求書への入金消込を作成"""
+        url = f"{self.base_url}/invoice_payments"
+        
+        data = {
+            "company_id": self.company_id,
+            "invoice_id": invoice_id,
+            "amount": amount,
+            "date": datetime.now().strftime("%Y-%m-%d"),
+            "from_walletable_type": "wallet_txn",
+            "from_walletable_id": wallet_txn_id
+        }
+        
+        response = requests.post(url, headers=self.headers, json=data)
+        response.raise_for_status()
+        return response.json()
 
 
 class ClaudeClient:
@@ -367,10 +421,44 @@ class SlackNotifier:
 
 def process_wallet_txn(txn: Dict, freee_client: FreeeClient, 
                       claude_client: ClaudeClient, 
-                      slack_notifier: Optional[SlackNotifier]) -> Dict:
+                      slack_notifier: Optional[SlackNotifier],
+                      unpaid_invoices: List[Dict] = None) -> Dict:
     """個別の取引を処理"""
     try:
-        # Claude APIで分析
+        # まず請求書とのマッチングを試みる（入金の場合のみ）
+        if txn.get("amount", 0) > 0 and unpaid_invoices:
+            print(f"  請求書とのマッチングを確認中...")
+            matched_invoice = freee_client.match_with_invoice(txn, unpaid_invoices)
+            
+            if matched_invoice:
+                print(f"  請求書とマッチしました: {matched_invoice.get('invoice_number')} ({matched_invoice.get('partner_display_name')})")
+                
+                # DRY_RUNモードのチェック
+                if os.getenv("DRY_RUN", "false").lower() == "true":
+                    print(f"  [DRY_RUN] 請求書消込をスキップします")
+                    return {
+                        "txn_id": txn["id"],
+                        "status": "dry_run_invoice_matched",
+                        "invoice_id": matched_invoice["id"],
+                        "invoice_number": matched_invoice.get("invoice_number"),
+                        "partner_name": matched_invoice.get("partner_display_name")
+                    }
+                
+                # 請求書への消込を実行
+                result = freee_client.create_invoice_payment(
+                    wallet_txn_id=txn["id"],
+                    invoice_id=matched_invoice["id"],
+                    amount=txn.get("amount", 0)
+                )
+                print(f"  請求書消込完了: Invoice Payment ID={result.get('invoice_payment', {}).get('id')}")
+                return {
+                    "txn_id": txn["id"],
+                    "status": "invoice_matched",
+                    "invoice_id": matched_invoice["id"],
+                    "invoice_payment_id": result.get("invoice_payment", {}).get("id")
+                }
+        
+        # 請求書とマッチしない場合は、通常の分析処理
         print(f"  分析中: {txn.get('description', '')}")
         analysis = claude_client.analyze_transaction(txn)
         print(f"  分析結果: 信頼度={analysis['confidence']:.2f}")
@@ -506,12 +594,21 @@ def main():
             print("処理対象の明細はありません")
             return []
         
+        # 未消込請求書の取得
+        print("\n未消込請求書を取得中...")
+        try:
+            unpaid_invoices = freee_client.get_unpaid_invoices()
+            print(f"{len(unpaid_invoices)}件の未消込請求書を取得しました")
+        except Exception as e:
+            print(f"  未消込請求書の取得に失敗しました: {e}")
+            unpaid_invoices = []
+        
         # 各取引の処理
         print("\n取引を処理中...")
         results = []
         for i, txn in enumerate(wallet_txns, 1):
             print(f"\n[{i}/{len(wallet_txns)}] 処理中: {txn.get('description', 'No description')} ¥{txn.get('amount', 0):,}")
-            result = process_wallet_txn(txn, freee_client, claude_client, slack_notifier)
+            result = process_wallet_txn(txn, freee_client, claude_client, slack_notifier, unpaid_invoices)
             results.append(result)
         
         # 結果の保存
@@ -524,16 +621,19 @@ def main():
         
         # 結果の出力
         registered = len([r for r in results if r["status"] == "registered"])
+        invoice_matched = len([r for r in results if r["status"] == "invoice_matched"])
         needs_confirmation = len([r for r in results if r["status"] == "needs_confirmation"])
         errors = len([r for r in results if r["status"] == "error"])
         dry_run = len([r for r in results if r["status"] == "dry_run"])
+        dry_run_invoice = len([r for r in results if r["status"] == "dry_run_invoice_matched"])
         
         print("\n=== 処理完了 ===")
         print(f"  自動登録: {registered}件")
+        print(f"  請求書消込: {invoice_matched}件")
         print(f"  要確認: {needs_confirmation}件")
         print(f"  エラー: {errors}件")
-        if dry_run > 0:
-            print(f"  DRY_RUN: {dry_run}件")
+        if dry_run > 0 or dry_run_invoice > 0:
+            print(f"  DRY_RUN: {dry_run + dry_run_invoice}件 (うち請求書消込: {dry_run_invoice}件)")
         
         return results
         
