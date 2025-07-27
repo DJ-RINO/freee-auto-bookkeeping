@@ -5,7 +5,7 @@
 ## 必須項目
 - [ ] FREEE_ACCESS_TOKEN が設定されている
 - [ ] FREEE_COMPANY_ID が設定されている（数字のみ）
-- [ ] CLAUDE_API_KEY が設定されている
+- [ ] ANTHROPIC_API_KEY が設定されている
 
 ## オプション
 - [ ] SLACK_WEBHOOK_URL が設定されている
