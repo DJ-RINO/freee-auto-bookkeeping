@@ -9,10 +9,8 @@ import re
 
 load_dotenv()
 
-CONFIDENCE_THRESHOLD = 0.9  # 90%以上で自動登録
+CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.9"))  # デフォルト90%以上で自動登録
 ALWAYS_NOTIFY = os.getenv("ALWAYS_NOTIFY", "false").lower() == "true"  # 常にSlack通知するオプション
-
-CONFIDENCE_THRESHOLD = 1.0  # 100%の確信度のみ自動登録
 
 class FreeeClient:
     """freee API クライアント（過去の取引履歴取得機能付き）"""
@@ -56,7 +54,11 @@ class FreeeClient:
         
         response = requests.get(url, headers=self.headers, params=params)
         response.raise_for_status()
-        return response.json().get("account_items", [])
+        try:
+            return response.json().get("account_items", [])
+        except json.JSONDecodeError:
+            print(f"  警告: 勘定科目一覧のJSON解析に失敗しました")
+            return []
     
     def get_tax_codes(self) -> Dict[int, str]:
         """税区分一覧を取得"""
@@ -160,7 +162,9 @@ class FreeeClient:
         try:
             response = requests.get(url, headers=self.headers, params=params)
             response.raise_for_status()
-            return response.json().get("partner", {}).get("name", "")
+            data = response.json()
+            partner = data.get("partner", {})
+            return partner.get("name", "") if partner else ""
         except:
             return ""
     
@@ -186,9 +190,14 @@ class FreeeClient:
         # wallet_txnの詳細を取得してamountとtypeを判定
         if amount is None or txn_type is None:
             txn_detail = self._get_wallet_txn_detail(wallet_txn_id)
-            amount = abs(txn_detail.get("amount", 0))
-            # 金額の正負で収入/支出を判定
-            txn_type = "income" if txn_detail.get("amount", 0) > 0 else "expense"
+            if txn_detail:
+                amount = abs(txn_detail.get("amount", 0))
+                # 金額の正負で収入/支出を判定
+                txn_type = "income" if txn_detail.get("amount", 0) > 0 else "expense"
+            else:
+                # フォールバック値
+                amount = 0
+                txn_type = "expense"
         
         # 取引先の検索または作成
         partner_id = self._get_or_create_partner(partner_name) if partner_name else None
@@ -226,7 +235,12 @@ class FreeeClient:
         
         response = requests.get(url, headers=self.headers, params=params)
         response.raise_for_status()
-        return response.json().get("wallet_txn", {})
+        try:
+            data = response.json()
+            return data.get("wallet_txn", {}) if data else {}
+        except json.JSONDecodeError:
+            print(f"  警告: wallet_txn詳細のJSON解析に失敗しました")
+            return {}
     
     def _get_or_create_partner(self, partner_name: str) -> Optional[int]:
         """取引先を検索し、なければ作成"""
@@ -243,8 +257,8 @@ class FreeeClient:
         
         # 完全一致する取引先があれば返す
         for partner in partners:
-            if partner.get("name") == partner_name:
-                return partner["id"]
+            if partner and partner.get("name") == partner_name:
+                return partner.get("id")
         
         # なければ作成
         create_url = f"{self.base_url}/partners"
@@ -283,13 +297,13 @@ class FreeeClient:
             # 金額が一致するかチェック
             if invoice.get("total_amount") == txn_amount:
                 # 取引先名が摘要に含まれるかチェック
-                partner_name = invoice.get("partner_display_name", "").upper()
-                if partner_name and partner_name in txn_description:
+                partner_name = invoice.get("partner_display_name", "")
+                if partner_name and partner_name.upper() in txn_description:
                     return invoice
                 
                 # 請求書番号が摘要に含まれるかチェック  
                 invoice_number = invoice.get("invoice_number", "")
-                if invoice_number and invoice_number in txn_description:
+                if invoice_number and invoice_number.upper() in txn_description:
                     return invoice
         
         return None
@@ -619,9 +633,10 @@ def analyze_company_patterns(freee_client: FreeeClient) -> Dict:
     
     for deal in deals:
         # 取引先の集計
-        if deal.get("partner_id"):
-            partner_name = freee_client._get_partner_name(deal["partner_id"])
-            if partner_name:
+        partner_id = deal.get("partner_id")
+        if partner_id:
+            partner_name = freee_client._get_partner_name(partner_id)
+            if partner_name:  # 空文字列でない場合のみカウント
                 partner_counts[partner_name] += 1
         
         # 勘定科目の集計
@@ -661,7 +676,24 @@ class SlackNotifier:
         # 勘定科目IDから名前へのマッピングを作成
         self.account_item_names = {}
         for item in self.account_items:
-            self.account_item_names[item.get('id')] = item.get('name', f"ID: {item.get('id')}")
+            if item and isinstance(item, dict):
+                item_id = item.get('id')
+                if item_id is not None:
+                    self.account_item_names[item_id] = item.get('name', f"ID: {item_id}")
+        
+        # デフォルトの勘定科目名を設定（APIで取得できない場合の保険）
+        default_account_names = {
+            101: "売上高",
+            604: "通信費", 
+            607: "旅費交通費",
+            831: "雑費",
+            650: "給料手当"
+        }
+        
+        # APIで取得できなかった場合はデフォルト値を使用
+        if not self.account_item_names:
+            print("⚠️  勘定科目マスタが空のため、デフォルト値を使用します")
+            self.account_item_names = default_account_names
     
     def _get_tax_name(self, tax_code: int) -> str:
         """税区分コードから名前を取得"""
@@ -691,7 +723,7 @@ class SlackNotifier:
                     "type": "section",
                     "text": {
                         "type": "mrkdwn",
-                        "text": f"*未仕訳取引の確認*\n信頼度: {analysis['confidence']:.2f}"
+                        "text": f"*未仕訳取引の確認*\n信頼度: {analysis.get('confidence', 0):.2f}"
                     }
                 },
                 {
@@ -700,14 +732,14 @@ class SlackNotifier:
                         {"type": "mrkdwn", "text": f"*日付:* {txn.get('date', '')}"},
                         {"type": "mrkdwn", "text": f"*金額:* ¥{txn.get('amount', 0):,}"},
                         {"type": "mrkdwn", "text": f"*摘要:* {txn.get('description', '')}"},
-                        {"type": "mrkdwn", "text": f"*推定取引先:* {analysis['partner_name']}"}
+                        {"type": "mrkdwn", "text": f"*推定取引先:* {analysis.get('partner_name', '不明')}"}
                     ]
                 },
                 {
                     "type": "section",
                     "fields": [
-                        {"type": "mrkdwn", "text": f"*推定勘定科目:* {self.account_item_names.get(analysis['account_item_id'], '不明')} (ID: {analysis['account_item_id']})"},
-                        {"type": "mrkdwn", "text": f"*推定税区分:* {self._get_tax_name(analysis['tax_code'])} (コード: {analysis['tax_code']})"}
+                        {"type": "mrkdwn", "text": f"*推定勘定科目:* {self.account_item_names.get(analysis.get('account_item_id'), '不明')} (ID: {analysis.get('account_item_id', 'N/A')})"},
+                        {"type": "mrkdwn", "text": f"*推定税区分:* {self._get_tax_name(analysis.get('tax_code', 0))} (コード: {analysis.get('tax_code', 'N/A')})"}
                     ]
                 },
                 {
