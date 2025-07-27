@@ -415,13 +415,13 @@ def main():
     
     # その他の環境変数の読み込み
     freee_company_id = int(os.getenv("FREEE_COMPANY_ID", "0"))
-    claude_api_key = os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY")
+    claude_api_key = os.getenv("FREEE_CLAUDE_API_KEY") or os.getenv("ANTHROPIC_API_KEY") or os.getenv("CLAUDE_API_KEY")
     slack_webhook_url = os.getenv("SLACK_WEBHOOK_URL")
     
     # 必須パラメータのチェック
     if not freee_access_token or not freee_company_id or not claude_api_key:
         print("エラー: 必須の環境変数が設定されていません")
-        print("FREEE_ACCESS_TOKEN, FREEE_COMPANY_ID, ANTHROPIC_API_KEY または CLAUDE_API_KEY を確認してください")
+        print("FREEE_ACCESS_TOKEN, FREEE_COMPANY_ID, FREEE_CLAUDE_API_KEY を確認してください")
         return []
     
     # DRY_RUNモードの表示

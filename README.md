@@ -46,7 +46,7 @@ freee会計の未仕訳明細を、Claude APIで自動判定して登録する�
 2. Settings > Secrets and variables > Actions で以下を設定：
    - `FREEE_ACCESS_TOKEN`
    - `FREEE_COMPANY_ID`
-   - `ANTHROPIC_API_KEY`
+   - `FREEE_CLAUDE_API_KEY`
    - `SLACK_WEBHOOK_URL`（オプション）
 
 ### 3. ローカル実行
