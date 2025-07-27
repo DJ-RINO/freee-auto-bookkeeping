@@ -205,7 +205,7 @@ confidence は 0.0〜1.0 の値で、推定の確信度を表します。
 """
         
         data = {
-            "model": "claude-3-sonnet-20240229",
+            "model": "claude-3-5-sonnet-20241022",
             "max_tokens": 1000,
             "temperature": 0.1,
             "system": self.system_prompt,
