@@ -1,0 +1,67 @@
+name: Generate freee Auto Rules
+
+on:
+  workflow_dispatch:
+    inputs:
+      output_format:
+        description: '出力形式'
+        required: false
+        default: 'csv'
+        type: choice
+        options:
+          - csv
+          - csv_and_guide
+
+jobs:
+  generate-rules:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Generate freee auto-bookkeeping rules
+      env:
+        FREEE_ACCESS_TOKEN: ${{ secrets.FREEE_ACCESS_TOKEN }}
+        FREEE_COMPANY_ID: ${{ secrets.FREEE_COMPANY_ID }}
+      run: |
+        echo "=== freee自動仕訳ルール生成 ==="
+        echo "全期間の取引データを分析します..."
+        python src/setup_freee_rules.py
+    
+    - name: Upload generated files
+      uses: actions/upload-artifact@v4
+      with:
+        name: freee-auto-rules-${{ github.run_id }}
+        path: |
+          freee_auto_rules_*.csv
+          freee_rules_implementation_guide.md
+        retention-days: 30
+    
+    - name: Display summary
+      run: |
+        echo "## 📊 生成完了"
+        echo ""
+        echo "生成されたファイル:"
+        ls -la freee_auto_rules_*.csv
+        echo ""
+        echo "### 次のステップ:"
+        echo "1. 上記のArtifactsからCSVファイルをダウンロード"
+        echo "2. freeeの「自動で経理」設定画面でインポート"
+        echo "3. 高信頼度のルールから順に登録"
+        echo ""
+        if [ -f freee_rules_implementation_guide.md ]; then
+          echo "### 実装ガイドの内容:"
+          head -20 freee_rules_implementation_guide.md
+        fi
