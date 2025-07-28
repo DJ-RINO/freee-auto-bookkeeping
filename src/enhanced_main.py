@@ -169,18 +169,34 @@ class FreeeClient:
         except:
             return ""
     
-    def get_unmatched_wallet_txns(self, limit: int = 100) -> List[Dict]:
-        """未仕訳の入出金明細を取得"""
+    def get_unmatched_wallet_txns(self, limit: int = 100, only_ai_needed: bool = True) -> List[Dict]:
+        """未仕訳の入出金明細を取得
+        
+        Args:
+            limit: 取得件数の上限
+            only_ai_needed: Trueの場合、freeeの自動仕訳ルールで処理できない取引のみ取得
+        """
         url = f"{self.base_url}/wallet_txns"
         params = {
             "company_id": self.company_id,
-            "status": "unmatched",
             "limit": limit
         }
         
+        # 通常は未仕訳（unmatched）のみ取得
+        if only_ai_needed:
+            params["status"] = "unmatched"
+        
         response = requests.get(url, headers=self.headers, params=params)
         response.raise_for_status()
-        return response.json().get("wallet_txns", [])
+        wallet_txns = response.json().get("wallet_txns", [])
+        
+        if only_ai_needed:
+            # freeeの自動仕訳ルールで処理できない取引のみフィルタリング
+            # rule_appliedフラグがない、またはfalseの取引のみ返す
+            return [txn for txn in wallet_txns 
+                   if not txn.get("rule_applied", False) and txn.get("status") == "unmatched"]
+        
+        return wallet_txns
     
     def create_deal(self, wallet_txn_id: int, account_item_id: int, 
                    tax_code: int, partner_name: str, amount: int = None,
@@ -286,26 +302,22 @@ class FreeeClient:
         return response.json().get("invoices", [])
     
     def match_with_invoice(self, wallet_txn: Dict, invoices: List[Dict]) -> Optional[Dict]:
-        """入金と請求書をマッチング"""
+        """入金と請求書をマッチング（拡張ルール適用）"""
+        from invoice_matching_rules import InvoiceMatchingRules
+        
         txn_amount = wallet_txn.get("amount", 0)
-        txn_description = wallet_txn.get("description", "").upper()
         
         # 入金（プラス金額）のみ処理
         if txn_amount <= 0:
             return None
         
-        for invoice in invoices:
-            # 金額が一致するかチェック
-            if invoice.get("total_amount") == txn_amount:
-                # 取引先名が摘要に含まれるかチェック
-                partner_name = invoice.get("partner_display_name", "")
-                if partner_name and partner_name.upper() in txn_description:
-                    return invoice
-                
-                # 請求書番号が摘要に含まれるかチェック  
-                invoice_number = invoice.get("invoice_number", "")
-                if invoice_number and invoice_number.upper() in txn_description:
-                    return invoice
+        # 拡張マッチングルールを使用
+        matcher = InvoiceMatchingRules()
+        matches = matcher.match_invoice_with_payment(wallet_txn, invoices)
+        
+        # スコアが0.7以上の最も高いマッチを返す
+        if matches and matches[0][1] >= 0.7:
+            return matches[0][0]
         
         return None
     
@@ -575,9 +587,10 @@ def enhanced_main():
     
     # 未仕訳明細の取得
     print("\n未仕訳明細を取得中...")
+    print("※ freeeの「自動で経理」で処理できない取引のみを対象とします")
     transaction_limit = int(os.getenv("TRANSACTION_LIMIT", "100"))
     wallet_txns = freee_client.get_unmatched_wallet_txns(limit=transaction_limit)
-    print(f"{len(wallet_txns)}件の未仕訳明細を取得しました")
+    print(f"{len(wallet_txns)}件の未仕訳明細を取得しました（AI処理が必要な取引）")
     
     if not wallet_txns:
         print("処理対象の明細はありません")
@@ -864,7 +877,15 @@ def process_enhanced_wallet_txn(txn: Dict, freee_client: FreeeClient,
                                claude_client: EnhancedClaudeClient, 
                                slack_notifier: Optional[SlackNotifier],
                                unpaid_invoices: List[Dict] = None) -> Dict:
-    """個別の取引を処理（過去の履歴を参照）"""
+    """個別の取引を処理
+    
+    処理優先順位:
+    1. 請求書消込（拡張ルール適用）
+    2. カスタムルール（custom_rules.py）
+    3. AI推論（Claude）- 最後の手段
+    
+    ※ freeeの「自動で経理」で処理できない取引のみがここに来る前提
+    """
     try:
         # まず請求書とのマッチングを試みる（入金の場合のみ）
         if txn.get("amount", 0) > 0 and unpaid_invoices:
