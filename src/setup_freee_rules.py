@@ -14,6 +14,7 @@ import re
 from auto_rule_manager import AutoRuleManager
 from enhanced_main import FreeeClient
 import requests
+import time
 
 
 def get_all_historical_deals(freee_client: FreeeClient) -> List[Dict]:
@@ -108,13 +109,42 @@ def get_deals_for_period(freee_client: FreeeClient, start_date: datetime, end_da
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 429:  # Rate limit
                 print("\n  API制限に達しました。10秒待機します...")
-                import time
                 time.sleep(10)
                 continue
             else:
                 raise
     
     return all_deals
+
+
+def get_partner_cache(freee_client: FreeeClient, all_deals: List[Dict]) -> Dict:
+    """取引先情報を事前に取得してキャッシュ"""
+    partner_ids = set()
+    for deal in all_deals:
+        partner_id = deal.get("partner_id")
+        if partner_id:
+            partner_ids.add(partner_id)
+    
+    partner_cache = {}
+    if partner_ids:
+        print(f"  {len(partner_ids)}件の取引先情報を取得中...", end="", flush=True)
+        url = f"{freee_client.base_url}/partners"
+        
+        for partner_id in partner_ids:
+            try:
+                response = requests.get(
+                    f"{url}/{partner_id}",
+                    headers=freee_client.headers,
+                    params={"company_id": freee_client.company_id}
+                )
+                if response.status_code == 200:
+                    partner_data = response.json().get("partner", {})
+                    partner_cache[partner_id] = partner_data.get("name", f"Partner_{partner_id}")
+            except:
+                partner_cache[partner_id] = f"Partner_{partner_id}"
+        print(" 完了")
+    
+    return partner_cache
 
 
 def analyze_all_transactions():
@@ -140,9 +170,14 @@ def analyze_all_transactions():
     all_deals = get_all_historical_deals(freee_client)
     print(f"  → 合計 {len(all_deals)} 件の取引を取得しました\n")
     
+    # 取引先情報を事前に取得してキャッシュ
+    print("  取引先情報を取得中...")
+    partner_cache = get_partner_cache(freee_client, all_deals)
+    print(f"  → {len(partner_cache)} 件の取引先情報を取得\n")
+    
     # 2. wallet_txnsも含めて完全なパターン分析
     print("2. 入出金明細からパターンを抽出中...")
-    pattern_stats = analyze_wallet_patterns(freee_client, all_deals)
+    pattern_stats = analyze_wallet_patterns(freee_client, all_deals, partner_cache)
     
     # 3. 最適なルールセットを生成
     print("\n3. 最適なルールセットを生成中...")
@@ -160,7 +195,7 @@ def analyze_all_transactions():
     return rules, pattern_stats
 
 
-def analyze_wallet_patterns(freee_client: FreeeClient, deals: List[Dict]) -> Dict:
+def analyze_wallet_patterns(freee_client: FreeeClient, deals: List[Dict], partner_cache: Dict) -> Dict:
     """wallet_txnsと取引を照合してパターンを分析"""
     
     patterns = defaultdict(lambda: {
@@ -172,11 +207,31 @@ def analyze_wallet_patterns(freee_client: FreeeClient, deals: List[Dict]) -> Dic
         "success_rate": 0.0
     })
     
+    print(f"  分析対象の取引数: {len(deals)}")
+    
     # 取引からパターンを抽出
+    empty_ref_count = 0
     for deal in deals:
+        # ref_numberまたはissue_dateからの説明を取得
         ref_number = deal.get("ref_number", "")
+        
+        # ref_numberが空の場合、詳細から説明を探す
+        if not ref_number and deal.get("details"):
+            for detail in deal["details"]:
+                if detail.get("description"):
+                    ref_number = detail["description"]
+                    break
+        
+        # それでも空の場合、取引先情報を使用
         if not ref_number:
-            continue
+            partner_id = deal.get("partner_id")
+            if partner_id and partner_id in partner_cache:
+                ref_number = partner_cache[partner_id]
+            elif partner_id:
+                ref_number = f"Partner_{partner_id}"
+            else:
+                empty_ref_count += 1
+                continue
         
         # キーワードを抽出
         keywords = extract_keywords(ref_number)
@@ -196,10 +251,23 @@ def analyze_wallet_patterns(freee_client: FreeeClient, deals: List[Dict]) -> Dic
     
     # 成功率を計算
     for keyword, data in patterns.items():
-        if data["count"] > 0:
+        if data["count"] > 0 and data["account_items"]:
             # 最も頻出する勘定科目の割合を成功率とする
             most_common = data["account_items"].most_common(1)[0][1]
             data["success_rate"] = most_common / data["count"]
+    
+    print(f"  空のref_number: {empty_ref_count}件")
+    print(f"  抽出されたパターン数: {len(patterns)}")
+    
+    # デバッグ: パターンが空の場合、最初の数件の取引を表示
+    if len(patterns) == 0 and len(deals) > 0:
+        print("\n  ⚠️ パターンが抽出されませんでした。取引データを確認:")
+        for i, deal in enumerate(deals[:5]):
+            partner_name = partner_cache.get(deal.get('partner_id'), 'N/A')
+            print(f"  取引{i+1}: ref_number='{deal.get('ref_number', '')}', partner_id={deal.get('partner_id')}, partner_name='{partner_name}'")
+            if deal.get('details'):
+                for detail in deal['details'][:1]:
+                    print(f"    詳細: description='{detail.get('description', '')}', account_item_id={detail.get('account_item_id')}")
     
     return patterns
 
@@ -377,12 +445,15 @@ def print_statistics(rules: List[Dict], pattern_stats: Dict):
     print(f"  低（70%未満）: {len(low_confidence)}個")
     
     # カバレッジ推定
-    total_transactions = sum(r["occurrence_count"] for r in rules)
-    high_conf_transactions = sum(r["occurrence_count"] for r in high_confidence)
+    total_transactions = sum(r["occurrence_count"] for r in rules) if rules else 0
+    high_conf_transactions = sum(r["occurrence_count"] for r in high_confidence) if high_confidence else 0
     
     print(f"\nカバレッジ推定:")
-    print(f"  高信頼度ルールでカバー: {high_conf_transactions}/{total_transactions} 件")
-    print(f"  カバー率: {high_conf_transactions/total_transactions*100:.1f}%")
+    if total_transactions > 0:
+        print(f"  高信頼度ルールでカバー: {high_conf_transactions}/{total_transactions} 件")
+        print(f"  カバー率: {high_conf_transactions/total_transactions*100:.1f}%")
+    else:
+        print("  ※ルールが生成されていません")
     
     # TOP10ルール
     print("\n頻出パターンTOP10:")
@@ -437,7 +508,7 @@ def output_implementation_guide(rules: List[Dict], pattern_stats: Dict):
 - 分析対象期間: 全期間（会社設立以降すべて）
 - 総パターン数: {len(pattern_stats)}
 - 推奨ルール数: {len(rules)}
-- 推定カバー率: {sum(r['occurrence_count'] for r in rules if r['confidence'] >= 0.9) / sum(r['occurrence_count'] for r in rules) * 100:.1f}%
+- 推定カバー率: {(sum(r['occurrence_count'] for r in rules if r['confidence'] >= 0.9) / sum(r['occurrence_count'] for r in rules) * 100) if rules else 0:.1f}%
 
 ## 2. 実装手順
 
@@ -496,8 +567,8 @@ def output_implementation_guide(rules: List[Dict], pattern_stats: Dict):
 3. 誤った自動仕訳を発見したらすぐに修正
 
 """.format(
-        sum(r['occurrence_count'] for r in rules if r['confidence'] >= 0.7) / sum(r['occurrence_count'] for r in rules) * 100,
-        100 - sum(r['occurrence_count'] for r in rules if r['confidence'] >= 0.7) / sum(r['occurrence_count'] for r in rules) * 100
+        (sum(r['occurrence_count'] for r in rules if r['confidence'] >= 0.7) / sum(r['occurrence_count'] for r in rules) * 100) if rules else 0,
+        (100 - sum(r['occurrence_count'] for r in rules if r['confidence'] >= 0.7) / sum(r['occurrence_count'] for r in rules) * 100) if rules else 100
     )
     
     with open("freee_rules_implementation_guide.md", "w", encoding="utf-8") as f:
