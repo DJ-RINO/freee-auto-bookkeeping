@@ -57,7 +57,7 @@ jobs:
         FREEE_COMPANY_ID: ${{ secrets.FREEE_COMPANY_ID }}
         FREEE_CLAUDE_API_KEY: ${{ secrets.FREEE_CLAUDE_API_KEY }}
         SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-        GITHUB_TOKEN: ${{ secrets.PAT_TOKEN || secrets.GITHUB_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.PAT_TOKEN || secrets.PATTOKEN || secrets.GITHUB_TOKEN }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         TRANSACTION_LIMIT: ${{ github.event.inputs.limit || '100' }}

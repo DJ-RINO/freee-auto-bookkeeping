@@ -7,6 +7,11 @@ from dotenv import load_dotenv
 from collections import defaultdict
 import re
 from custom_rules import apply_custom_rules, get_rule_explanation
+from config_loader import load_linking_config
+from filebox_client import FileBoxClient
+from matcher import match_candidates
+from linker import decide_action, ensure_not_duplicated_and_link
+from state_store import init_db
 
 load_dotenv()
 
@@ -287,6 +292,10 @@ class FreeeClient:
         response = requests.post(create_url, headers=self.headers, json=data)
         response.raise_for_status()
         return response.json()["partner"]["id"]
+
+    def attach_receipt_to_tx(self, tx_id: int, receipt_id: int) -> Dict:
+        """証憑を取引へ関連付け（暫定のダミー実装。正式APIに差し替え予定）"""
+        return {"ok": True, "tx_id": tx_id, "receipt_id": receipt_id}
     
     def get_unpaid_invoices(self) -> List[Dict]:
         """未消込の請求書を取得"""
@@ -578,6 +587,10 @@ def enhanced_main():
     claude_client = EnhancedClaudeClient(claude_api_key, freee_client)
     slack_notifier = SlackNotifier(slack_webhook_url, account_items) if slack_webhook_url else None
     
+    # 状態DBと設定読み込み
+    init_db()
+    linking_cfg = load_linking_config()
+
     # 過去の取引パターンを分析
     print("\n過去の取引パターンを学習中...")
     historical_summary = analyze_company_patterns(freee_client)
@@ -594,6 +607,8 @@ def enhanced_main():
     
     if not wallet_txns:
         print("処理対象の明細はありません")
+        # ここでレシート→既存仕訳への照合を今後組み込む（取引が自動処理済でも証憑リンクは必要）
+        # MVPではスキップ
         return
     
     # 未消込請求書の取得
