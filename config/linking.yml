@@ -1,0 +1,27 @@
+# Receipt linking configuration
+thresholds:
+  auto: 85
+  assist_min: 65
+  assist_max: 84
+
+tolerances:
+  amount_jpy: 1
+  days: 3
+
+weights:
+  amount: 0.4
+  date: 0.25
+  name: 0.3
+  tax_rate: 0.05
+
+similarity:
+  name_algo: jaro_winkler
+  high_mark: 0.85
+  min_candidate: 0.6
+
+ng_words:
+  - 振込
+  - 入金
+  - 出金
+
+
