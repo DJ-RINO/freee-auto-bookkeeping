@@ -1,0 +1,11 @@
+{
+  "access_token": "mGWy2XVTmcHQrcKYLnWKXhfFIOjBzLVYLIT48pvUemw",
+  "token_type": "bearer",
+  "expires_in": 21600,
+  "refresh_token": "4ZMhXDU6YGtJ1lOKvNdOdICVrOUePE1Mxj9ZyJupFCc",
+  "scope": "accounting:account_groups:write accounting:account_items:read accounting:account_items:write accounting:approval_flow_routes:read accounting:approval_request_forms:read accounting:approval_requests:read accounting:approval_requests:write accounting:companies:read accounting:companies:write accounting:deals:read accounting:deals:write accounting:division_tag_1:read accounting:division_tag_1:write accounting:division_tag_2:read accounting:division_tag_2:write accounting:division_tag_3:read accounting:division_tag_3:write accounting:docs:read accounting:expense_application_templates:read accounting:expense_application_templates:write accounting:expense_applications:read accounting:expense_applications:write accounting:fixed_assets:read accounting:general_ledgers:read accounting:items:read accounting:items:write accounting:manual_journals:read accounting:manual_journals:write accounting:partners:read accounting:partners:write accounting:payment_requests:read accounting:payment_requests:write accounting:receipts:read accounting:receipts:write accounting:reports_bs:read accounting:reports_cr:read accounting:reports_journals:read accounting:reports_pl:read accounting:sections:read accounting:sections:write accounting:tags:read accounting:tags:write accounting:taxes:read accounting:transfers:read accounting:transfers:write accounting:users:read accounting:users:write accounting:wallet_txns:read accounting:wallet_txns:write accounting:walletables:read accounting:walletables:write default_read dp:deals:read invoice:docs:read invoice:docs:write",
+  "created_at": 1754640317,
+  "company_id": 10383235,
+  "external_cid": "9857445918",
+  "expires_at": 1754661917.333752
+}

@@ -733,7 +733,9 @@ def main():
             print(f"  未消込請求書の取得に失敗しました: {e}")
             unpaid_invoices = []
         
-        # 各取引の処理
+    # ここにレシート照合のフックを将来的に差し込む（process_receipts）
+    # MVPでは既存フロー維持
+    # 各取引の処理
         print("\n取引を処理中...")
         results = []
         for i, txn in enumerate(wallet_txns, 1):
