@@ -24,6 +24,15 @@
 ### レート制限
 - 429/5xx は指数バックオフ（1,2,4,8,16s, 最大5回）で再試行
 
+### Webhookのデプロイ（Vercel採用時）
+- 本リポジトリをVercelにImport → Deploy
+- 環境変数（Project Settings → Environment Variables）に以下を登録
+  - `SLACK_SIGNING_SECRET`
+  - `GITHUB_TOKEN`（`repo`権限のPAT）
+  - `GITHUB_REPOSITORY`（例: DJ-RINO/freee-auto-bookkeeping）
+- Slack App → Interactivity → Request URL に `https://<your-vercel-domain>/api/slack/interactive` を設定
+- ボタン押下→Vercel→GitHub repository_dispatch→Actionsで反映
+
 ### 代替案（Slack→GitHub派 / Notion派）
 - Slack→GitHub: 現行。双方向が簡単、Actionsに集約
 - Notion派: 承認キューをNotion DBで管理。メリット: 可視性、権限管理。デメリット: 追加連携実装、速度
