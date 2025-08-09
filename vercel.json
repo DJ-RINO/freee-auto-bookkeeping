@@ -1,10 +1,6 @@
 {
   "version": 2,
-  "functions": {
-    "api/slack/interactive.ts": {
-      "runtime": "nodejs20.x"
-    }
-  }
+  "functions": {"api/slack/interactive.ts": {"runtime": "nodejs20.x"}}
 }
 
 

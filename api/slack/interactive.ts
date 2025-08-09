@@ -1,7 +1,6 @@
-import type { VercelRequest, VercelResponse } from '@vercel/node'
 import crypto from 'crypto'
 
-async function readRawBody(req: VercelRequest): Promise<string> {
+async function readRawBody(req: any): Promise<string> {
   return new Promise((resolve, reject) => {
     let data = ''
     req.setEncoding('utf8')
@@ -21,7 +20,11 @@ function verifySlackSignature(signingSecret: string, rawBody: string, timestamp:
   const hash = crypto.createHmac('sha256', signingSecret).update(base).digest('hex')
   const expected = `v0=${hash}`
   // constant-time compare
-  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature))
+  try {
+    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature))
+  } catch {
+    return false
+  }
 }
 
 function parseForm(body: string): Record<string, string> {
@@ -52,7 +55,7 @@ async function dispatchToGithub(clientPayload: any): Promise<Response> {
   return res as unknown as Response
 }
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
+export default async function handler(req: any, res: any) {
   try {
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'Method Not Allowed' })
