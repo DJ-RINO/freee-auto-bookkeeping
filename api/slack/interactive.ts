@@ -1,4 +1,4 @@
-import crypto from 'crypto'
+import { createHmac, timingSafeEqual } from 'node:crypto'
 
 async function readRawBody(req: any): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -17,11 +17,11 @@ function verifySlackSignature(signingSecret: string, rawBody: string, timestamp:
   if (!Number.isFinite(ts) || Math.abs(Date.now() / 1000 - ts) > 60 * 5) return false
 
   const base = `v0:${timestamp}:${rawBody}`
-  const hash = crypto.createHmac('sha256', signingSecret).update(base).digest('hex')
+  const hash = createHmac('sha256', signingSecret).update(base).digest('hex')
   const expected = `v0=${hash}`
   // constant-time compare
   try {
-    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature))
+    return timingSafeEqual(Buffer.from(expected), Buffer.from(signature))
   } catch {
     return false
   }
