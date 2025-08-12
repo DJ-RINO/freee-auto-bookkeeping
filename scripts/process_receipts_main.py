@@ -107,7 +107,15 @@ def main():
     init_db()
     
     # トークン管理
-    token_manager = FreeeTokenManager()
+    client_id = os.getenv("FREEE_CLIENT_ID")
+    client_secret = os.getenv("FREEE_CLIENT_SECRET")
+    github_token = os.getenv("GITHUB_TOKEN")
+    
+    if not client_id or not client_secret:
+        print("❌ FREEE_CLIENT_ID または FREEE_CLIENT_SECRET が設定されていません")
+        return
+    
+    token_manager = FreeeTokenManager(client_id, client_secret, github_token)
     access_token = token_manager.ensure_valid_token()
     
     if not access_token:
