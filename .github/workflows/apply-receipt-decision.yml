@@ -51,6 +51,7 @@ jobs:
 
       - name: Apply decision
         env:
+          PYTHONPATH: ${{ github.workspace }}
           INTERACTION_ID: ${{ github.event.client_payload.interaction_id || inputs.interaction_id }}
           ACTION:         ${{ github.event.client_payload.action || inputs.action }}
           AMOUNT:         ${{ github.event.client_payload.amount || inputs.amount }}
