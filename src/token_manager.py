@@ -171,6 +171,11 @@ def integrate_with_main():
     # 必要に応じてリフレッシュ
     new_tokens = token_manager.auto_refresh_if_needed(access_token, refresh_token)
     
+    # access_tokenがNoneで、new_tokensもない場合は、強制的にリフレッシュ
+    if not access_token and not new_tokens:
+        print("🔄 アクセストークンが存在しないため、リフレッシュします...")
+        new_tokens = token_manager.refresh_token(refresh_token)
+    
     if new_tokens:
         # 新しいトークンを取得した場合
         print("\n🔄 トークンが更新されました")
