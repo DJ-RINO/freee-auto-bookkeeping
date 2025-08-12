@@ -12,7 +12,7 @@ from datetime import datetime
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from token_manager import FreeeTokenManager
+from token_manager import integrate_with_main
 from state_store import init_db, write_audit
 from config_loader import load_linking_config
 from filebox_client import FileBoxClient
@@ -106,20 +106,12 @@ def main():
     # データベース初期化
     init_db()
     
-    # トークン管理
-    client_id = os.getenv("FREEE_CLIENT_ID")
-    client_secret = os.getenv("FREEE_CLIENT_SECRET")
-    github_token = os.getenv("GITHUB_TOKEN")
-    
-    if not client_id or not client_secret:
-        print("❌ FREEE_CLIENT_ID または FREEE_CLIENT_SECRET が設定されていません")
-        return
-    
-    token_manager = FreeeTokenManager(client_id, client_secret, github_token)
-    access_token = token_manager.ensure_valid_token()
-    
-    if not access_token:
-        print("❌ アクセストークンの取得に失敗しました")
+    # トークン管理（integrate_with_main関数を使用）
+    try:
+        access_token = integrate_with_main()
+        print("✅ アクセストークンを取得しました")
+    except Exception as e:
+        print(f"❌ トークン取得エラー: {e}")
         return
     
     company_id = int(os.getenv("FREEE_COMPANY_ID"))
