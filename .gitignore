@@ -29,3 +29,6 @@ Thumbs.db
 # Logs
 *.log
 .vercel
+.venv/
+receipt_state.db
+.tokens.json
