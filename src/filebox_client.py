@@ -19,39 +19,75 @@ class FileBoxClient:
 
     def list_receipts(self, limit: int = 50) -> List[Dict]:
         """ファイルボックスからレシート/領収書を取得
-        注: freee APIでは証憑は user_files エンドポイントで管理される可能性がある
-        """
-        # まず receipts を試す
-        try:
-            url = f"{self.base_url}/receipts"
-            params = {"company_id": self.company_id, "limit": limit}
-            r = requests.get(url, headers=self.headers, params=params)
-            if r.status_code == 200:
-                return r.json().get("receipts", [])
-        except:
-            pass
         
-        # receipts が失敗したら user_files を試す
-        try:
-            url = f"{self.base_url}/user_files"
-            params = {"company_id": self.company_id, "limit": limit}
-            r = requests.get(url, headers=self.headers, params=params)
-            r.raise_for_status()
-            # user_files の場合、レシート形式に変換
-            files = r.json().get("user_files", [])
-            receipts = []
-            for f in files:
-                receipts.append({
-                    "id": f.get("id"),
-                    "description": f.get("name", ""),
-                    "amount": 0,  # user_files には金額情報がない場合がある
-                    "created_at": f.get("created_at"),
-                    "user_name": f.get("user", {}).get("display_name", "")
-                })
-            return receipts
-        except Exception as e:
-            print(f"Warning: Failed to fetch from user_files: {e}")
-            return []
+        freee APIの証憑管理エンドポイント:
+        - /api/1/expense_application_line_templates (経費科目)
+        - /api/1/expense_applications (経費申請)
+        - /api/1/receipts (証憑) - エンタープライズプランのみ
+        
+        現在はダミーデータを返す実装
+        """
+        print("📌 注意: freeeファイルボックスAPIの正しいエンドポイントを確認中...")
+        print("   freee管理画面でファイルボックスに証憑がアップロードされているか確認してください")
+        
+        # 様々なエンドポイントを試す
+        endpoints = [
+            ("receipts", "receipts"),
+            ("expense_applications", "expense_applications"),
+            ("wallet_txns", "wallet_txns"),  # 明細に添付された証憑
+        ]
+        
+        for endpoint_name, response_key in endpoints:
+            try:
+                url = f"{self.base_url}/{endpoint_name}"
+                params = {"company_id": self.company_id, "limit": limit}
+                print(f"   Trying: {endpoint_name}...")
+                r = requests.get(url, headers=self.headers, params=params)
+                
+                if r.status_code == 200:
+                    data = r.json()
+                    items = data.get(response_key, [])
+                    print(f"   ✓ {endpoint_name}: {len(items)} items found")
+                    
+                    # wallet_txnsの場合、添付ファイル情報を探す
+                    if endpoint_name == "wallet_txns" and items:
+                        receipts = []
+                        for txn in items:
+                            # 添付ファイルがあるかチェック
+                            if txn.get("receipt_ids") or txn.get("attachments"):
+                                receipts.append({
+                                    "id": txn.get("id"),
+                                    "description": txn.get("description", ""),
+                                    "amount": txn.get("amount", 0),
+                                    "created_at": txn.get("date"),
+                                    "user_name": "",
+                                    "wallet_txn_id": txn.get("id")
+                                })
+                        if receipts:
+                            print(f"   📎 {len(receipts)} 件の証憑付き明細を発見")
+                            return receipts
+                    
+                    # その他のエンドポイントの場合
+                    if items and endpoint_name != "wallet_txns":
+                        return items
+                        
+                elif r.status_code in [401, 403]:
+                    print(f"   ✗ {endpoint_name}: 権限エラー (プランの制限の可能性)")
+                elif r.status_code == 404:
+                    print(f"   ✗ {endpoint_name}: エンドポイントが存在しません")
+                else:
+                    print(f"   ✗ {endpoint_name}: Status {r.status_code}")
+                    
+            except Exception as e:
+                print(f"   ✗ {endpoint_name}: {str(e)[:100]}")
+        
+        print("\n⚠️ レシート/証憑が見つかりませんでした。")
+        print("   以下を確認してください：")
+        print("   1. freee管理画面でファイルボックスに証憑がアップロードされているか")
+        print("   2. APIの権限設定が正しいか")
+        print("   3. 使用しているプランが証憑APIに対応しているか")
+        
+        return []
 
     def download_receipt(self, receipt_id: int) -> bytes:
         """レシート/領収書ファイルをダウンロード"""
