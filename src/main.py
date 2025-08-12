@@ -3,6 +3,8 @@ import json
 import requests
 from datetime import datetime
 from typing import Dict, List, Optional
+from config_loader import load_linking_config
+from linker import normalize_targets, find_best_target, ensure_not_duplicated_and_link
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -34,6 +36,23 @@ class FreeeClient:
         response = requests.get(url, headers=self.headers, params=params)
         response.raise_for_status()
         return response.json().get("wallet_txns", [])
+
+    def get_recent_deals(self, days: int = 30, limit: int = 100) -> List[Dict]:
+        """直近の登録済み取引（deals）を取得して候補に利用する"""
+        from datetime import timedelta
+        url = f"{self.base_url}/deals"
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days)
+        params = {
+            "company_id": self.company_id,
+            "start_issue_date": start_date.strftime("%Y-%m-%d"),
+            "end_issue_date": end_date.strftime("%Y-%m-%d"),
+            "limit": limit,
+            "offset": 0,
+        }
+        r = requests.get(url, headers=self.headers, params=params)
+        r.raise_for_status()
+        return r.json().get("deals", [])
     
     def create_deal(self, wallet_txn_id: int, account_item_id: int, 
                    tax_code: int, partner_name: str, amount: int = None,
@@ -76,6 +95,10 @@ class FreeeClient:
         response = requests.post(url, headers=self.headers, json=data)
         response.raise_for_status()
         return response.json()
+
+    def attach_receipt_to_tx(self, tx_id: int, receipt_id: int) -> Dict:
+        """証憑を取引へ関連付け（暫定のダミー実装。正式APIに差し替え予定）"""
+        return {"ok": True, "tx_id": tx_id, "receipt_id": receipt_id}
     
     def _get_wallet_txn_detail(self, wallet_txn_id: int) -> Dict:
         """wallet_txnの詳細を取得"""
@@ -733,8 +756,11 @@ def main():
             print(f"  未消込請求書の取得に失敗しました: {e}")
             unpaid_invoices = []
         
-    # ここにレシート照合のフックを将来的に差し込む（process_receipts）
-    # MVPでは既存フロー維持
+    # ここにレシート照合のフックを差し込む
+        try:
+            process_receipts(freee_client)
+        except Exception as e:
+            print(f"[warn] process_receipts failed: {e}")
     # 各取引の処理
         print("\n取引を処理中...")
         results = []
@@ -778,3 +804,67 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+def process_receipts(freee_client: FreeeClient):
+    """MVPの証憑ひも付け（未仕訳を対象）。enhanced_main と同等の骨組み。"""
+    from filebox_client import FileBoxClient
+    from ocr_models import ReceiptRecord
+    from datetime import datetime as _dt
+
+    print("\n[receipts] 証憑の自動ひも付けを開始します")
+    linking_cfg = load_linking_config()
+    fb = FileBoxClient(access_token=freee_client.access_token, company_id=freee_client.company_id)
+
+    try:
+        receipts = fb.list_receipts(limit=50)
+    except Exception as e:
+        print(f"  証憑一覧の取得に失敗: {e}")
+        return
+
+    if not receipts:
+        print("  ファイルボックスに処理対象の証憑はありません")
+        return
+
+    wallet_txns = freee_client.get_unmatched_wallet_txns(limit=200)
+    targets = normalize_targets(wallet_txns, deals=[])
+
+    linked = 0
+    for r in receipts:
+        rid = str(r.get("id"))
+        try:
+            data = fb.download_receipt(int(rid))
+        except Exception as e:
+            print(f"  receipt {rid}: download failed: {e}")
+            continue
+
+        from filebox_client import FileBoxClient as _F
+        file_sha1 = _F.sha1_of_bytes(data)
+
+        rec = ReceiptRecord(
+            receipt_id=rid,
+            file_hash=file_sha1,
+            vendor=r.get("description") or r.get("title") or "",
+            date=_dt.now().date(),
+            amount=abs(int(r.get("amount", 0))) if isinstance(r.get("amount"), int) else 0,
+        )
+
+        best = find_best_target(rec, targets, linking_cfg)
+        if not best:
+            continue
+
+        try:
+            ensure_not_duplicated_and_link(
+                freee_client,
+                rec,
+                file_sha1,
+                best,
+                linking_cfg,
+                target_type=best.get("type", "wallet_txn"),
+                allow_delete=False,
+            )
+            linked += 1
+        except Exception as e:
+            print(f"  receipt {rid}: link failed: {e}")
+
+    print(f"[receipts] 自動リンク完了: {linked}件")

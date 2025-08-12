@@ -6,12 +6,14 @@ from datetime import datetime, timedelta
 from typing import Dict, Optional
 
 
-DB_PATH = os.getenv("RECEIPT_STATE_DB", "receipt_state.db")
+def _get_db_path() -> str:
+    """環境変数から毎回DBパスを取得（テストでの monkeypatch に追従するため）。"""
+    return os.getenv("RECEIPT_STATE_DB", "receipt_state.db")
 
 
 @contextmanager
 def _conn():
-    con = sqlite3.connect(DB_PATH)
+    con = sqlite3.connect(_get_db_path())
     con.execute("PRAGMA journal_mode=WAL;")
     try:
         yield con
@@ -28,6 +30,16 @@ def init_db():
               receipt_hash TEXT PRIMARY KEY,
               meta_json TEXT,
               linked_at TEXT
+            );
+            """
+        )
+        # ファイル重複検出用（ファイルのSHA1ごとに、関連するreceipt_idの集合を保持）
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS file_digests (
+              file_sha1 TEXT PRIMARY KEY,
+              receipt_ids_json TEXT,
+              first_seen_at TEXT
             );
             """
         )
@@ -59,6 +71,7 @@ def init_db():
 
 def is_duplicated(receipt_hash: str) -> bool:
     with _conn() as con:
+        # 存在チェックのみ。テストで初期状態はFalseになることを期待
         cur = con.execute("SELECT 1 FROM linked_hashes WHERE receipt_hash=?", (receipt_hash,))
         return cur.fetchone() is not None
 
@@ -100,5 +113,39 @@ def write_audit(level: str, actor: str, action: str, target_ids: list, score: in
             "INSERT INTO audit_log(ts, level, actor, action, target_ids, score, result, error) VALUES (?,?,?,?,?,?,?,?)",
             (datetime.utcnow().isoformat(), level, actor, action, json.dumps(target_ids), score, result, error),
         )
+
+
+def record_file_seen(file_sha1: str, receipt_id: str):
+    """ファイルのSHA1に紐づくreceipt_idを記録する。重複は集合的に保持。
+    """
+    with _conn() as con:
+        cur = con.execute("SELECT receipt_ids_json FROM file_digests WHERE file_sha1=?", (file_sha1,))
+        row = cur.fetchone()
+        if row and row[0]:
+            try:
+                ids = set(json.loads(row[0]))
+            except Exception:
+                ids = set()
+        else:
+            ids = set()
+        ids.add(str(receipt_id))
+        con.execute(
+            "INSERT OR REPLACE INTO file_digests(file_sha1, receipt_ids_json, first_seen_at) VALUES (?,?,?)",
+            (file_sha1, json.dumps(sorted(list(ids))), datetime.utcnow().isoformat()),
+        )
+
+
+def get_existing_for_file_sha1(file_sha1: str) -> list[str]:
+    """同じファイルSHA1で既に登録済みのreceipt_idリストを返す。なければ空。
+    """
+    with _conn() as con:
+        cur = con.execute("SELECT receipt_ids_json FROM file_digests WHERE file_sha1=?", (file_sha1,))
+        row = cur.fetchone()
+        if not row or not row[0]:
+            return []
+        try:
+            return list(json.loads(row[0]))
+        except Exception:
+            return []
 
 

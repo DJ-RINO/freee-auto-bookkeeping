@@ -7,6 +7,11 @@ from dotenv import load_dotenv
 from collections import defaultdict
 import re
 from custom_rules import apply_custom_rules, get_rule_explanation
+from config_loader import load_linking_config
+from filebox_client import FileBoxClient
+from matcher import match_candidates
+from linker import decide_action, ensure_not_duplicated_and_link, normalize_targets, find_best_target
+from state_store import init_db
 
 load_dotenv()
 
@@ -287,6 +292,10 @@ class FreeeClient:
         response = requests.post(create_url, headers=self.headers, json=data)
         response.raise_for_status()
         return response.json()["partner"]["id"]
+
+    def attach_receipt_to_tx(self, tx_id: int, receipt_id: int) -> Dict:
+        """証憑を取引へ関連付け（暫定のダミー実装。正式APIに差し替え予定）"""
+        return {"ok": True, "tx_id": tx_id, "receipt_id": receipt_id}
     
     def get_unpaid_invoices(self) -> List[Dict]:
         """未消込の請求書を取得"""
@@ -578,6 +587,10 @@ def enhanced_main():
     claude_client = EnhancedClaudeClient(claude_api_key, freee_client)
     slack_notifier = SlackNotifier(slack_webhook_url, account_items) if slack_webhook_url else None
     
+    # 状態DBと設定読み込み
+    init_db()
+    linking_cfg = load_linking_config()
+
     # 過去の取引パターンを分析
     print("\n過去の取引パターンを学習中...")
     historical_summary = analyze_company_patterns(freee_client)
@@ -594,6 +607,8 @@ def enhanced_main():
     
     if not wallet_txns:
         print("処理対象の明細はありません")
+        # 既存仕訳への証憑リンクを試みる余地はあるが、MVPではスキップ
+        # TODO: deals取得→process_receipts
         return
     
     # 未消込請求書の取得
@@ -641,6 +656,12 @@ def enhanced_main():
         print(f"  カスタムルール適用: {rule_matched}件")
     if dry_run > 0 or dry_run_invoice > 0:
         print(f"  DRY_RUN: {dry_run + dry_run_invoice}件 (うち請求書消込: {dry_run_invoice}件)")
+
+    # 将来: レシートひも付けをこの後段階で実施
+    try:
+        process_receipts(freee_client, linking_cfg)
+    except Exception as e:
+        print(f"[warn] process_receipts failed: {e}")
 
 
 def analyze_company_patterns(freee_client: FreeeClient) -> Dict:
@@ -1046,3 +1067,76 @@ def save_results(results: List[Dict]):
 
 if __name__ == "__main__":
     enhanced_main()
+
+
+def process_receipts(freee_client: FreeeClient, linking_cfg: Dict):
+    """ファイルボックス内の証憑を、未仕訳(wallet_txn)または登録済み(deal)へ自動リンク。
+    MVP: dealsの取得APIは未実装のため、未仕訳のみを対象にし、骨組みを先行追加。
+    """
+    from filebox_client import FileBoxClient
+    from ocr_models import ReceiptRecord
+    from matcher import match_candidates
+
+    print("\n[receipts] 証憑の自動ひも付けを開始します")
+    fb = FileBoxClient(access_token=freee_client.access_token, company_id=freee_client.company_id)
+    receipts = []
+    try:
+        receipts = fb.list_receipts(limit=50)
+    except Exception as e:
+        print(f"  証憑一覧の取得に失敗: {e}")
+        return
+
+    if not receipts:
+        print("  ファイルボックスに処理対象の証憑はありません")
+        return
+
+    # 候補ターゲット: 未仕訳 + 直近の登録済み取引（過去30日）
+    wallet_txns = freee_client.get_unmatched_wallet_txns(limit=200, only_ai_needed=False)
+    try:
+        recent_deals = freee_client.get_historical_deals(days=30, limit=100)
+    except Exception:
+        recent_deals = []
+    targets = normalize_targets(wallet_txns, deals=recent_deals)
+
+    linked = 0
+    for r in receipts:
+        rid = str(r.get("id"))
+        try:
+            data = fb.download_receipt(int(rid))
+        except Exception as e:
+            print(f"  receipt {rid}: download failed: {e}")
+            continue
+
+        from filebox_client import FileBoxClient as _F
+        file_sha1 = _F.sha1_of_bytes(data)
+
+        # OCR結果（MVP: ファイル名やメタデータから推定。将来OCR統合）
+        # ここでは最低限のダミー情報を作成
+        rec = ReceiptRecord(
+            receipt_id=rid,
+            file_hash=file_sha1,
+            vendor=r.get("description") or r.get("title") or "",
+            date=datetime.now().date(),
+            amount=abs(int(r.get("amount", 0))) if isinstance(r.get("amount"), int) else 0,
+        )
+
+        best = find_best_target(rec, targets, linking_cfg)
+        if not best:
+            continue
+
+        # best には id/score などが入る（normalize_targets の出力互換）
+        try:
+            ensure_not_duplicated_and_link(
+                freee_client,
+                rec,
+                file_sha1,
+                best,
+                linking_cfg,
+                target_type=best.get("type", "wallet_txn"),
+                allow_delete=False,
+            )
+            linked += 1
+        except Exception as e:
+            print(f"  receipt {rid}: link failed: {e}")
+
+    print(f"[receipts] 自動リンク完了: {linked}件")

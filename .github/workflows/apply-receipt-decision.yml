@@ -1,0 +1,76 @@
+name: Apply Receipt Decision
+
+on:
+  # Slack→Vercel→repository_dispatch からの自動起動
+  repository_dispatch:
+    types: [apply-receipt-decision]
+  # 手動実行用
+  workflow_dispatch:
+    inputs:
+      interaction_id:
+        description: "Slack interaction id (or any unique id)"
+        required: true
+        type: string
+      action:
+        description: "Decision action"
+        required: true
+        type: choice
+        options:
+          - approve
+          - edit
+          - reject
+      amount:
+        description: "Optional amount"
+        required: false
+        type: string
+      date:
+        description: "Optional date (YYYY-MM-DD)"
+        required: false
+        type: string
+      vendor:
+        description: "Optional vendor"
+        required: false
+        type: string
+
+jobs:
+  apply-decision:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Apply decision
+        env:
+          INTERACTION_ID: ${{ github.event.client_payload.interaction_id || inputs.interaction_id }}
+          ACTION:         ${{ github.event.client_payload.action || inputs.action }}
+          AMOUNT:         ${{ github.event.client_payload.amount || inputs.amount }}
+          DATE:           ${{ github.event.client_payload.date || inputs.date }}
+          VENDOR:         ${{ github.event.client_payload.vendor || inputs.vendor }}
+        run: |
+          set -euo pipefail
+          args=(--interaction-id "$INTERACTION_ID" --action "$ACTION")
+          if [ -n "${AMOUNT:-}" ]; then args+=(--amount "$AMOUNT"); fi
+          if [ -n "${DATE:-}" ]; then args+=(--date "$DATE"); fi
+          if [ -n "${VENDOR:-}" ]; then args+=(--vendor "$VENDOR"); fi
+          echo "Running: python scripts/apply_decision.py ${args[*]}"
+          python scripts/apply_decision.py "${args[@]}"
+
+      - name: Upload audit DB (optional)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: receipt-state-${{ github.run_id }}
+          path: |
+            receipt_state.db
+          if-no-files-found: ignore
+

@@ -4,6 +4,9 @@ import requests
 from datetime import datetime, timedelta
 from typing import Dict, Optional
 import base64
+from nacl import encoding as nacl_encoding, public as nacl_public  # for test patch targets
+public = nacl_public
+encoding = nacl_encoding
 
 class FreeeTokenManager:
     """freeeのトークンを自動的に管理・更新するクラス"""
@@ -81,15 +84,10 @@ class FreeeTokenManager:
         public_key_data = response.json()
         
         # 値を暗号化
-        try:
-            from nacl import encoding, public
-            public_key = public.PublicKey(public_key_data['key'].encode("utf-8"), encoding.Base64Encoder())
-            sealed_box = public.SealedBox(public_key)
-            encrypted = sealed_box.encrypt(secret_value.encode("utf-8"))
-            encrypted_value = base64.b64encode(encrypted).decode("utf-8")
-        except ImportError:
-            print("⚠️  PyNaClがインストールされていません。pip install PyNaClを実行してください")
-            return False
+        public_key = nacl_public.PublicKey(public_key_data['key'].encode("utf-8"), nacl_encoding.Base64Encoder())
+        sealed_box = nacl_public.SealedBox(public_key)
+        encrypted = sealed_box.encrypt(secret_value.encode("utf-8"))
+        encrypted_value = base64.b64encode(encrypted).decode("utf-8")
         
         # Secretを更新
         secret_url = f"https://api.github.com/repos/{repo}/actions/secrets/{secret_name}"
