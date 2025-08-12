@@ -17,8 +17,7 @@ from state_store import init_db, write_audit
 from config_loader import load_linking_config
 from filebox_client import FileBoxClient
 from ocr_models import ReceiptRecord
-from matcher import find_best_target, normalize_targets
-from linker import ensure_not_duplicated_and_link, decide_action
+from linker import find_best_target, normalize_targets, ensure_not_duplicated_and_link, decide_action
 from notifier import SlackNotifier
 
 class FreeeClient:
