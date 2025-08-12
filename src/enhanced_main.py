@@ -658,10 +658,13 @@ def enhanced_main():
         print(f"  DRY_RUN: {dry_run + dry_run_invoice}件 (うち請求書消込: {dry_run_invoice}件)")
 
     # 将来: レシートひも付けをこの後段階で実施
+    print("\n=== レシート処理を開始 ===")
     try:
         process_receipts(freee_client, linking_cfg)
     except Exception as e:
-        print(f"[warn] process_receipts failed: {e}")
+        print(f"[ERROR] process_receipts failed: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def analyze_company_patterns(freee_client: FreeeClient) -> Dict:
