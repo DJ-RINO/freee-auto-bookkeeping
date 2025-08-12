@@ -18,7 +18,18 @@ from config_loader import load_linking_config
 from filebox_client import FileBoxClient
 from ocr_models import ReceiptRecord
 from linker import find_best_target, normalize_targets, ensure_not_duplicated_and_link, decide_action
-from notifier import SlackNotifier
+
+def send_slack_notification(webhook_url: str, message: dict):
+    """Slackに通知を送信"""
+    if not webhook_url:
+        return
+    
+    import requests
+    try:
+        response = requests.post(webhook_url, json=message)
+        response.raise_for_status()
+    except Exception as e:
+        print(f"Slack通知エラー: {e}")
 
 class FreeeClient:
     """freee APIクライアント（レシート処理用）"""
@@ -114,7 +125,6 @@ def main():
     
     # Slack通知準備
     slack_url = os.getenv("SLACK_WEBHOOK_URL")
-    notifier = SlackNotifier(slack_url) if slack_url else None
     
     # ファイルボックスからレシート取得
     print("\n📎 ファイルボックスからレシート取得中...")
@@ -127,8 +137,8 @@ def main():
     
     if not receipts:
         print("  処理対象のレシートはありません")
-        if notifier:
-            notifier.send({
+        if slack_url:
+            send_slack_notification(slack_url, {
                 "text": "📎 レシート紐付け: 処理対象なし",
                 "blocks": [{
                     "type": "section",
@@ -224,7 +234,7 @@ def main():
                 
             elif action == "ASSIST":
                 # Slack確認
-                if notifier:
+                if slack_url:
                     print("  📨 Slack確認通知を送信")
                     # TODO: インタラクティブメッセージ実装
                     results["assist"] += 1
@@ -259,8 +269,8 @@ def main():
         }, f, ensure_ascii=False, indent=2)
     
     # Slack通知
-    if notifier and not dry_run:
-        notifier.send({
+    if slack_url and not dry_run:
+        send_slack_notification(slack_url, {
             "text": f"📎 レシート紐付け完了",
             "blocks": [
                 {
