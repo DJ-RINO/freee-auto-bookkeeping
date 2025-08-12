@@ -1,0 +1,89 @@
+name: Receipt Linking
+
+on:
+  schedule:
+    # 毎日午前10時（JST）に実行
+    - cron: '0 1 * * *'  # UTC 01:00 = JST 10:00
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run mode (確認のみ、紐付けしない)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+      limit:
+        description: '処理するレシート数の上限'
+        required: false
+        default: '50'
+        type: string
+      target_type:
+        description: '紐付け対象'
+        required: false
+        default: 'both'
+        type: choice
+        options:
+          - 'both'          # 未仕訳と登録済み両方
+          - 'wallet_txn'    # 未仕訳のみ
+          - 'deal'          # 登録済み取引のみ
+
+jobs:
+  link-receipts:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Cache pip packages
+      uses: actions/cache@v3
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Process receipts
+      env:
+        FREEE_ACCESS_TOKEN: ${{ secrets.FREEE_ACCESS_TOKEN }}
+        FREEE_REFRESH_TOKEN: ${{ secrets.FREEE_REFRESH_TOKEN }}
+        FREEE_CLIENT_ID: ${{ secrets.FREEE_CLIENT_ID }}
+        FREEE_CLIENT_SECRET: ${{ secrets.FREEE_CLIENT_SECRET }}
+        FREEE_COMPANY_ID: ${{ secrets.FREEE_COMPANY_ID }}
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        GITHUB_TOKEN: ${{ secrets.PAT_TOKEN || secrets.PATTOKEN || secrets.GITHUB_TOKEN }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        RECEIPT_LIMIT: ${{ github.event.inputs.limit || '50' }}
+        TARGET_TYPE: ${{ github.event.inputs.target_type || 'both' }}
+      run: |
+        pip install pynacl
+        echo "=== レシート紐付け処理 ==="
+        echo "処理モード: $([ "$DRY_RUN" = "true" ] && echo "テスト（確認のみ）" || echo "本番（実際に紐付け）")"
+        echo "処理上限: $RECEIPT_LIMIT 件"
+        echo "対象: $TARGET_TYPE"
+        python scripts/process_receipts_main.py
+    
+    - name: Upload results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: receipt-linking-results-${{ github.run_id }}
+        path: |
+          receipt_results_*.json
+          receipt_state.db
+        retention-days: 30
