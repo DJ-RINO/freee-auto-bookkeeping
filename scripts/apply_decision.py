@@ -5,7 +5,7 @@ from typing import Optional
 
 import requests
 
-from src.state_store import get_pending, write_audit
+from src.state_store import get_pending, write_audit, init_db
 
 
 def _refresh_access_token() -> str:
@@ -27,6 +27,8 @@ def _call_with_backoff(method, url, headers=None, json=None, params=None, max_re
 
 
 def apply_decision(interaction_id: str, action: str, amount: Optional[int], date: Optional[str], vendor: Optional[str]):
+    # Ensure state DB is initialized (creates tables if they don't exist)
+    init_db()
     pending = get_pending(interaction_id)
     if not pending:
         print("No pending interaction found")
