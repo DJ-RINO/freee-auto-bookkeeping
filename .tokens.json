@@ -1,8 +1,5 @@
 {
-  "access_token": "S-ntkSkgJnJh0G3A3WcmqxWwceDZWxi7NzJxtZWBk7o",
-  "refresh_token": "c1X1athVGk1FucAHxVlqU99YwyYOOoc1gU6kwuKgezQ",
-  "expires_in": 21600,
-  "token_type": "bearer",
-  "created_at": 1753679391,
-  "company_id": 10383235
+  "access_token": "new_token",
+  "refresh_token": "new_refresh",
+  "expires_in": 86400
 }
