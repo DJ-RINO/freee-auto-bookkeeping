@@ -34,13 +34,21 @@ class FileBoxClient:
         endpoints = [
             ("receipts", "receipts"),
             ("expense_applications", "expense_applications"),
+            ("expense_application_line_templates", "expense_application_line_templates"),
+            ("deals", "deals"),  # 取引
             ("wallet_txns", "wallet_txns"),  # 明細に添付された証憑
+            ("journals", "journals"),  # 仕訳帳
         ]
         
         for endpoint_name, response_key in endpoints:
             try:
                 url = f"{self.base_url}/{endpoint_name}"
                 params = {"company_id": self.company_id, "limit": limit}
+                
+                # dealsの場合はreceipts情報を含める
+                if endpoint_name == "deals":
+                    params["include"] = "receipts"
+                
                 print(f"   Trying: {endpoint_name}...")
                 r = requests.get(url, headers=self.headers, params=params)
                 
@@ -48,6 +56,18 @@ class FileBoxClient:
                     data = r.json()
                     items = data.get(response_key, [])
                     print(f"   ✓ {endpoint_name}: {len(items)} items found")
+                    
+                    # レスポンスのキーを表示（デバッグ用）
+                    if not items and data:
+                        print(f"     Response keys: {list(data.keys())[:5]}")
+                        # 最初のアイテムの構造を確認
+                        for key in data.keys():
+                            if isinstance(data[key], list) and data[key]:
+                                print(f"     Found list '{key}' with {len(data[key])} items")
+                                if len(data[key]) > 0:
+                                    first_item = data[key][0]
+                                    if isinstance(first_item, dict):
+                                        print(f"     First item keys: {list(first_item.keys())[:10]}")
                     
                     # wallet_txnsの場合、添付ファイル情報を探す
                     if endpoint_name == "wallet_txns" and items:
@@ -65,6 +85,26 @@ class FileBoxClient:
                                 })
                         if receipts:
                             print(f"   📎 {len(receipts)} 件の証憑付き明細を発見")
+                            return receipts
+                    
+                    # dealsの場合、receiptsフィールドを確認
+                    if endpoint_name == "deals" and items:
+                        receipts = []
+                        for deal in items:
+                            # receiptsフィールドがあるかチェック
+                            deal_receipts = deal.get("receipts", [])
+                            if deal_receipts:
+                                for receipt in deal_receipts:
+                                    receipts.append({
+                                        "id": receipt.get("id"),
+                                        "description": receipt.get("description", deal.get("issue_date", "")),
+                                        "amount": deal.get("amount", 0),
+                                        "created_at": receipt.get("created_at", deal.get("issue_date")),
+                                        "user_name": receipt.get("user", {}).get("display_name", ""),
+                                        "deal_id": deal.get("id")
+                                    })
+                        if receipts:
+                            print(f"   📎 {len(receipts)} 件の証憑を取引から発見")
                             return receipts
                     
                     # その他のエンドポイントの場合
