@@ -48,30 +48,82 @@ class FreeeClient:
     def get_wallet_transactions(self, limit: int = 100):
         """明細一覧を取得（未仕訳・仕訳済み両方）"""
         import requests
+        from datetime import datetime, timedelta
+        
         url = f"{self.base_url}/wallet_txns"
+        # 直近90日間のデータを取得（証憑と同じ範囲）
+        now = datetime.now()
+        start_date = (now - timedelta(days=90)).strftime('%Y-%m-%d')
+        end_date = now.strftime('%Y-%m-%d')
+        
         params = {
             "company_id": self.company_id,
             "limit": limit,
-            "walletable_type": "bank_account"
+            "walletable_type": "bank_account",
+            "start_date": start_date,
+            "end_date": end_date
         }
         
+        print(f"  📊 wallet_txns API呼び出し: {start_date} 〜 {end_date}")
+        print(f"    URL: {url}")
+        print(f"    Params: {params}")
         response = requests.get(url, headers=self.get_headers(), params=params)
         if response.status_code == 200:
-            return response.json().get("wallet_txns", [])
+            data = response.json()
+            result = data.get("wallet_txns", [])
+            print(f"  ✅ wallet_txns取得成功: {len(result)}件")
+            # レスポンスキーを確認
+            if not result:
+                print(f"    レスポンスキー: {list(data.keys())[:5]}")
+                if "meta" in data:
+                    print(f"    Meta情報: total_count={data['meta'].get('total_count', 0)}")
+                print(f"    検索条件: 日付={start_date}~{end_date}, walletable_type=bank_account")
+            return result
+        else:
+            print(f"  ⚠️ wallet_txns APIエラー: {response.status_code}")
+            if response.text:
+                print(f"    詳細: {response.text[:500]}")
         return []
     
     def get_deals(self, limit: int = 100):
         """登録済み取引を取得"""
         import requests
+        from datetime import datetime, timedelta
+        
         url = f"{self.base_url}/deals"
+        # 直近90日間のデータを取得（証憑と同じ範囲）
+        now = datetime.now()
+        start_date = (now - timedelta(days=90)).strftime('%Y-%m-%d')
+        end_date = now.strftime('%Y-%m-%d')
+        
         params = {
             "company_id": self.company_id,
-            "limit": limit
+            "limit": limit,
+            "start_issue_date": start_date,
+            "end_issue_date": end_date
         }
         
+        print(f"  📊 deals API呼び出し: {start_date} 〜 {end_date}")
+        print(f"    URL: {url}")
+        print(f"    Params: {params}")
         response = requests.get(url, headers=self.get_headers(), params=params)
         if response.status_code == 200:
-            return response.json().get("deals", [])
+            data = response.json()
+            result = data.get("deals", [])
+            print(f"  ✅ deals取得成功: {len(result)}件")
+            # レスポンスキーを確認
+            if not result:
+                print(f"    レスポンスキー: {list(data.keys())[:5]}")
+                if "meta" in data:
+                    print(f"    Meta情報: total_count={data['meta'].get('total_count', 0)}")
+                print(f"    検索条件: 日付={start_date}~{end_date}")
+                # 空の場合のヒント
+                print("    ヒント: freee管理画面でこの期間に取引があるか確認してください")
+            return result
+        else:
+            print(f"  ⚠️ deals APIエラー: {response.status_code}")
+            if response.text:
+                print(f"    詳細: {response.text[:500]}")
         return []
     
     def attach_receipt_to_tx(self, tx_id: int, receipt_id: int):
@@ -117,6 +169,7 @@ def main():
     company_id = int(os.getenv("FREEE_COMPANY_ID"))
     
     # クライアント初期化
+    print(f"\n🆔 会社ID: {company_id}")
     freee_client = FreeeClient(access_token, company_id)
     filebox_client = FileBoxClient(access_token, company_id)
     
@@ -152,22 +205,34 @@ def main():
     
     # 紐付け対象の取引を取得
     print("\n💳 紐付け対象の取引を取得中...")
-    targets = []
+    
+    wallet_txns = []
+    deals = []
     
     if target_type in ("both", "wallet_txn"):
-        wallet_txns = freee_client.get_wallet_transactions(limit=200)
+        print("  🔍 wallet_txnsを取得中...")
+        wallet_txns = freee_client.get_wallet_transactions(limit=100)
         print(f"  明細: {len(wallet_txns)}件")
-        targets.extend(normalize_targets(wallet_txns, []))
     
     if target_type in ("both", "deal"):
-        deals = freee_client.get_deals(limit=200)
+        print("  🔍 dealsを取得中...")
+        deals = freee_client.get_deals(limit=100)
         print(f"  取引: {len(deals)}件")
-        # TODO: dealsのnormalize実装
-        # targets.extend(normalize_targets([], deals))
+    
+    # normalize_targetsでまとめて正規化
+    targets = normalize_targets(wallet_txns, deals)
     
     if not targets:
         print("❌ 紐付け対象の取引がありません")
-        return
+        print("  考えられる原因:")
+        print("    1. 直近90日間に取引が登録されていない")
+        print("    2. APIの権限が不足している")
+        print("    3. 会社IDが正しく設定されていない")
+        print(f"  環境変数: FREEE_COMPANY_ID={os.getenv('FREEE_COMPANY_ID', '未設定')}")
+        print("  ヒント: freee管理画面で取引が登録されているか確認してください")
+        # 取引がなくてもレシート情報を表示するため処理を続行
+        # returnをコメントアウトして処理を続行
+        # return
     
     # レシート処理
     print("\n🔄 レシート紐付け処理中...")
@@ -188,16 +253,60 @@ def main():
             data = filebox_client.download_receipt(int(receipt_id))
             file_sha1 = FileBoxClient.sha1_of_bytes(data)
             
+            # レシート情報の取得
+            file_name = receipt.get("file_name", "")
+            memo = receipt.get("memo", "")
+            created_at = receipt.get("created_at", "")
+            
+            # ファイル名やメモから金額を抽出
+            import re
+            amount = 0
+            amount_patterns = [
+                r'([0-9,]+)円',
+                r'¥([0-9,]+)',
+                r'\$([0-9,]+)',
+                r'([0-9,]+)\s*JPY',
+            ]
+            
+            search_text = f"{file_name} {memo}"
+            for pattern in amount_patterns:
+                match = re.search(pattern, search_text)
+                if match:
+                    amount_str = match.group(1).replace(',', '')
+                    try:
+                        amount = int(amount_str)
+                        break
+                    except ValueError:
+                        pass
+            
+            # 日付を作成日から取得
+            try:
+                date_obj = datetime.fromisoformat(created_at.replace('Z', '+00:00')) if created_at else datetime.now()
+            except:
+                date_obj = datetime.now()
+            
+            # vendor情報はファイル名またはメモから取得
+            vendor = file_name or memo or receipt.get("description", "")
+            
             # レシートレコード作成
             rec = ReceiptRecord(
                 receipt_id=receipt_id,
                 file_hash=file_sha1,
-                vendor=receipt.get("description", "") or receipt.get("user_name", ""),
-                date=datetime.fromisoformat(receipt.get("created_at", "")).date(),
-                amount=abs(int(receipt.get("amount", 0)))
+                vendor=vendor,
+                date=date_obj.date(),
+                amount=amount
             )
             
-            print(f"  店舗: {rec.vendor}, 金額: ¥{rec.amount:,}, 日付: {rec.date}")
+            print(f"  🏪 店舗: {rec.vendor[:30] if rec.vendor else 'N/A'}")
+            print(f"  💰 金額: ¥{rec.amount:,}")
+            print(f"  📅 日付: {rec.date}")
+            print(f"  🆔 ID: {receipt_id}, SHA1: {file_sha1[:8]}...")
+            
+            # targetsが空の場合はスキップ
+            if not targets:
+                print("  ⚠️ 取引がないためスキップ")
+                results["manual"] += 1
+                continue
             
             # 最適な取引を検索
             best = find_best_target(rec, targets, linking_cfg)

@@ -1094,12 +1094,21 @@ def process_receipts(freee_client: FreeeClient, linking_cfg: Dict):
         return
 
     # 候補ターゲット: 未仕訳 + 直近の登録済み取引（過去30日）
-    wallet_txns = freee_client.get_unmatched_wallet_txns(limit=200, only_ai_needed=False)
+    wallet_txns = freee_client.get_unmatched_wallet_txns(limit=100, only_ai_needed=False)
     try:
         recent_deals = freee_client.get_historical_deals(days=30, limit=100)
     except Exception:
         recent_deals = []
     targets = normalize_targets(wallet_txns, deals=recent_deals)
+    
+    print(f"  💳 明細: {len(wallet_txns)}件")
+    print(f"  📝 取引: {len(recent_deals)}件")
+    
+    if not targets:
+        print("  ⚠️ 紐付け対象の取引がありません")
+        print("  ヒント: 取引がない場合でも、レシートの情報を確認しておきます")
+        # 取引がなくてもレシート情報を確認する
+        # targetsを空リストとして処理を続行
 
     linked = 0
     for r in receipts:
@@ -1114,17 +1123,59 @@ def process_receipts(freee_client: FreeeClient, linking_cfg: Dict):
         file_sha1 = _F.sha1_of_bytes(data)
 
         # OCR結果（MVP: ファイル名やメタデータから推定。将来OCR統合）
-        # ここでは最低限のダミー情報を作成
+        # receipts APIからファイル名とメモを取得
+        file_name = r.get("file_name", "")
+        memo = r.get("memo", "")
+        created_at = r.get("created_at", "")
+        
+        # ファイル名やメモから金額を抽出（例: "1234円"、"¥1,234"などのパターン）
+        import re
+        amount = 0
+        amount_patterns = [
+            r'([0-9,]+)円',
+            r'¥([0-9,]+)',
+            r'\$([0-9,]+)',
+            r'([0-9,]+)\s*JPY',
+        ]
+        
+        search_text = f"{file_name} {memo}"
+        for pattern in amount_patterns:
+            match = re.search(pattern, search_text)
+            if match:
+                amount_str = match.group(1).replace(',', '')
+                try:
+                    amount = int(amount_str)
+                    break
+                except ValueError:
+                    pass
+        
+        # 日付を作成日から取得
+        try:
+            date_obj = datetime.fromisoformat(created_at.replace('Z', '+00:00')) if created_at else datetime.now()
+        except:
+            date_obj = datetime.now()
+        
+        # vendor情報はファイル名またはメモから取得
+        vendor = file_name or memo or r.get("description", "")
+        
         rec = ReceiptRecord(
             receipt_id=rid,
             file_hash=file_sha1,
-            vendor=r.get("description") or r.get("title") or "",
-            date=datetime.now().date(),
-            amount=abs(int(r.get("amount", 0))) if isinstance(r.get("amount"), int) else 0,
+            vendor=vendor,
+            date=date_obj.date(),
+            amount=amount,
         )
+        
+        print(f"  📄 Receipt {rid}: vendor={vendor[:30]}, amount={amount}, date={date_obj.date()}")
 
+        # targetsが空の場合でもレシート情報を表示
+        if not targets:
+            print(f"    ❌ 紐付け先がありませんが、レシート情報を表示します")
+            continue
+            
         best = find_best_target(rec, targets, linking_cfg)
         if not best:
+            print(f"    ❌ マッチする取引が見つかりません: vendor={rec.vendor[:30]}, amount={rec.amount}")
             continue
 
         # best には id/score などが入る（normalize_targets の出力互換）

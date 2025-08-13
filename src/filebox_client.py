@@ -63,9 +63,20 @@ class FileBoxClient:
                     if receipts:
                         # 最初の数件の情報を表示
                         for i, receipt in enumerate(receipts[:3]):
-                            print(f"     [{i+1}] ID: {receipt.get('id')}, "
-                                  f"ファイル名: {receipt.get('file_name', 'N/A')}, "
-                                  f"説明: {receipt.get('description', 'N/A')}")
+                            # ファイル名、メモ、作成日などの情報を表示
+                            file_name = receipt.get('file_name', '')
+                            memo = receipt.get('memo', '')
+                            created_at = receipt.get('created_at', '')
+                            status = receipt.get('status', '')
+                            
+                            print(f"     [{i+1}] ID: {receipt.get('id')}")
+                            if file_name:
+                                print(f"        📝 ファイル名: {file_name}")
+                            if memo:
+                                print(f"        💬 メモ: {memo[:50]}")
+                            if created_at:
+                                print(f"        📅 作成日: {created_at[:10]}")
+                            print(f"        🆙 ステータス: {status}")
                         if len(receipts) > 3:
                             print(f"     ... 他 {len(receipts) - 3} 件")
                         return receipts
