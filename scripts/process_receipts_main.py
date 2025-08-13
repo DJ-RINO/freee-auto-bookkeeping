@@ -262,6 +262,31 @@ def main():
             user_name = receipt.get("user_name", "")
             receipt_status = receipt.get("status", "")
             
+            # receipt_metadatumからOCR情報を取得
+            receipt_metadatum = receipt.get("receipt_metadatum", {})
+            ocr_vendor = ""
+            if receipt_metadatum:
+                # OCRで読み取った金額と店舗名を取得
+                receipt_amount = receipt_metadatum.get("total_amount", receipt_amount) or receipt_amount
+                ocr_vendor = receipt_metadatum.get("payee_name", "") or receipt_metadatum.get("vendor", "") or receipt_metadatum.get("issuer", "")
+                ocr_date = receipt_metadatum.get("transaction_date", "")
+                if i == 1:
+                    print(f"  [デバッグ] receipt_metadatum キー: {list(receipt_metadatum.keys())}")
+                    print(f"  [デバッグ] OCR total_amount={receipt_metadatum.get('total_amount')}, payee_name='{receipt_metadatum.get('payee_name')}'")
+            
+            # qualified_invoiceからも情報を取得
+            qualified_invoice = receipt.get("qualified_invoice", {})
+            if qualified_invoice and i == 1:
+                print(f"  [デバッグ] qualified_invoice キー: {list(qualified_invoice.keys()) if qualified_invoice else []}")
+                if qualified_invoice:
+                    qi_amount = qualified_invoice.get("total_amount", 0)
+                    qi_vendor = qualified_invoice.get("issuer_name", "")
+                    if qi_amount and not receipt_amount:
+                        receipt_amount = qi_amount
+                    if qi_vendor and not ocr_vendor:
+                        ocr_vendor = qi_vendor
+                    print(f"  [デバッグ] QI total_amount={qi_amount}, issuer_name='{qi_vendor}'")
+            
             # デバッグ: レシートデータを表示
             if i == 1:  # 最初の1件だけ詳細表示
                 print(f"  [デバッグ] レシートデータキー: {list(receipt.keys())}")
@@ -298,8 +323,8 @@ def main():
             except:
                 date_obj = datetime.now()
             
-            # vendor情報はファイル名、メモ、説明、ユーザー名の優先順位で取得
-            vendor = file_name or memo or description or user_name or ""
+            # vendor情報はOCR結果、ファイル名、メモ、説明、ユーザー名の優先順位で取得
+            vendor = ocr_vendor or file_name or memo or description or user_name or ""
             
             # vendorが空の場合はレシートIDを使用
             if not vendor:
