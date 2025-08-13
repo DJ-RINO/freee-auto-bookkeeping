@@ -153,7 +153,22 @@ def find_best_target(ocr: ReceiptRecord, targets: List[Dict], cfg: Dict) -> Opti
     if candidates:
         best = candidates[0]
         print(f"  [マッチング] ベスト候補: score={best['score']}, 理由={best.get('reasons', [])}")
-        print(f"  [マッチング] デルタ: 金額差={best['deltas']['amount']}円, 名前='{best['deltas']['name'][:30]}'")
+        # best辞書にIDが含まれているか確認
+        target_id = best.get('tx_id') or best.get('id')
+        if not target_id:
+            print(f"  ❌ マッチング候補にIDが含まれていません: {best}")
+            return None
+        
+        # best['deltas']['name']がNoneでないことを確認
+        deltas_name = best.get('deltas', {}).get('name', 'N/A')
+        if deltas_name is None:
+            deltas_name = 'N/A'
+        print(f"  [マッチング] デルタ: 金額差={best['deltas']['amount']}円, 名前='{deltas_name[:30]}'")
+        
+        # bestにIDを確実に含める
+        if 'id' not in best and 'tx_id' in best:
+            best['id'] = best['tx_id']
+        
         return best
     else:
         print(f"  [マッチング] 候補なし (min_similarity={cfg.get('similarity', {}).get('min_candidate', 0.6)})")
