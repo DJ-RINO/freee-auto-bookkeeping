@@ -256,28 +256,39 @@ def main():
             # レシート情報の取得
             file_name = receipt.get("file_name", "")
             memo = receipt.get("memo", "")
+            description = receipt.get("description", "")
             created_at = receipt.get("created_at", "")
+            receipt_amount = receipt.get("amount", 0)  # 証憑自体の金額
+            user_name = receipt.get("user_name", "")
+            receipt_status = receipt.get("status", "")
             
-            # ファイル名やメモから金額を抽出
-            import re
-            amount = 0
-            amount_patterns = [
-                r'([0-9,]+)円',
-                r'¥([0-9,]+)',
-                r'\$([0-9,]+)',
-                r'([0-9,]+)\s*JPY',
-            ]
+            # デバッグ: レシートデータを表示
+            if i == 0:  # 最初の1件だけ詳細表示
+                print(f"  [デバッグ] レシートデータキー: {list(receipt.keys())}")
             
-            search_text = f"{file_name} {memo}"
-            for pattern in amount_patterns:
-                match = re.search(pattern, search_text)
-                if match:
-                    amount_str = match.group(1).replace(',', '')
-                    try:
-                        amount = int(amount_str)
-                        break
-                    except ValueError:
-                        pass
+            # 金額の取得（優先順位： receipt_amount > ファイル名/メモから抽出）
+            amount = receipt_amount
+            
+            # receipt_amountが0の場合、ファイル名やメモから金額を抽出
+            if amount == 0:
+                import re
+                amount_patterns = [
+                    r'([0-9,]+)円',
+                    r'¥([0-9,]+)',
+                    r'\$([0-9,]+)',
+                    r'([0-9,]+)\s*JPY',
+                ]
+                
+                search_text = f"{file_name} {memo} {description}"
+                for pattern in amount_patterns:
+                    match = re.search(pattern, search_text)
+                    if match:
+                        amount_str = match.group(1).replace(',', '')
+                        try:
+                            amount = int(amount_str)
+                            break
+                        except ValueError:
+                            pass
             
             # 日付を作成日から取得
             try:
@@ -285,8 +296,12 @@ def main():
             except:
                 date_obj = datetime.now()
             
-            # vendor情報はファイル名またはメモから取得
-            vendor = file_name or memo or receipt.get("description", "")
+            # vendor情報はファイル名、メモ、説明、ユーザー名の優先順位で取得
+            vendor = file_name or memo or description or user_name or ""
+            
+            # vendorが空の場合はレシートIDを使用
+            if not vendor:
+                vendor = f"レシート#{receipt_id}"
             
             # レシートレコード作成
             rec = ReceiptRecord(

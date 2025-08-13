@@ -44,7 +44,8 @@ class FileBoxClient:
                     "company_id": self.company_id, 
                     "limit": limit,
                     "start_date": start_date.isoformat(),
-                    "end_date": end_date.isoformat()
+                    "end_date": end_date.isoformat(),
+                    "include": "user"  # ユーザー情報を含める
                 }
                 
                 if status_param:

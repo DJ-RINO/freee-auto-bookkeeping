@@ -1,0 +1,12 @@
+{
+  "execution_time": "2025-08-13T16:50:51.181747",
+  "dry_run": true,
+  "results": {
+    "auto": 0,
+    "assist": 0,
+    "manual": 0,
+    "error": 0,
+    "skipped": 1
+  },
+  "processed_receipts": 1
+}
