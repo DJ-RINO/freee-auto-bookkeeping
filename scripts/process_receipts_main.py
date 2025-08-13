@@ -267,25 +267,30 @@ def main():
             ocr_vendor = ""
             if receipt_metadatum:
                 # OCRで読み取った金額と店舗名を取得
-                receipt_amount = receipt_metadatum.get("total_amount", receipt_amount) or receipt_amount
-                ocr_vendor = receipt_metadatum.get("payee_name", "") or receipt_metadatum.get("vendor", "") or receipt_metadatum.get("issuer", "")
-                ocr_date = receipt_metadatum.get("transaction_date", "")
+                # freee APIは 'amount' フィールドに金額を格納している
+                receipt_amount = receipt_metadatum.get("amount", receipt_amount) or receipt_metadatum.get("total_amount", receipt_amount) or receipt_amount
+                # partner_name（取引先名）も店舗名の候補として追加
+                ocr_vendor = receipt_metadatum.get("partner_name", "") or receipt_metadatum.get("payee_name", "") or receipt_metadatum.get("vendor", "") or receipt_metadatum.get("issuer", "")
+                ocr_date = receipt_metadatum.get("issue_date", "") or receipt_metadatum.get("transaction_date", "")
                 if i == 1:
                     print(f"  [デバッグ] receipt_metadatum キー: {list(receipt_metadatum.keys())}")
-                    print(f"  [デバッグ] OCR total_amount={receipt_metadatum.get('total_amount')}, payee_name='{receipt_metadatum.get('payee_name')}'")
+                    print(f"  [デバッグ] OCR amount={receipt_metadatum.get('amount')}, partner_name='{receipt_metadatum.get('partner_name')}'")
+                    print(f"  [デバッグ] OCR issue_date='{receipt_metadatum.get('issue_date')}'")
             
             # qualified_invoiceからも情報を取得
             qualified_invoice = receipt.get("qualified_invoice", {})
-            if qualified_invoice and i == 1:
-                print(f"  [デバッグ] qualified_invoice キー: {list(qualified_invoice.keys()) if qualified_invoice else []}")
-                if qualified_invoice:
-                    qi_amount = qualified_invoice.get("total_amount", 0)
-                    qi_vendor = qualified_invoice.get("issuer_name", "")
-                    if qi_amount and not receipt_amount:
-                        receipt_amount = qi_amount
-                    if qi_vendor and not ocr_vendor:
-                        ocr_vendor = qi_vendor
-                    print(f"  [デバッグ] QI total_amount={qi_amount}, issuer_name='{qi_vendor}'")
+            if qualified_invoice:
+                if i == 1:
+                    print(f"  [デバッグ] qualified_invoice キー: {list(qualified_invoice.keys())}")
+                # qualified_invoiceからも金額と発行者名を取得
+                qi_amount = qualified_invoice.get("amount", 0) or qualified_invoice.get("total_amount", 0)
+                qi_vendor = qualified_invoice.get("issuer_name", "") or qualified_invoice.get("issuer", "")
+                if qi_amount and not receipt_amount:
+                    receipt_amount = qi_amount
+                if qi_vendor and not ocr_vendor:
+                    ocr_vendor = qi_vendor
+                if i == 1:
+                    print(f"  [デバッグ] QI amount={qi_amount}, issuer_name='{qi_vendor}'")
             
             # デバッグ: レシートデータを表示
             if i == 1:  # 最初の1件だけ詳細表示
@@ -317,9 +322,15 @@ def main():
                         except ValueError:
                             pass
             
-            # 日付を作成日から取得
+            # 日付を取得（OCRの日付を優先）
             try:
-                date_obj = datetime.fromisoformat(created_at.replace('Z', '+00:00')) if created_at else datetime.now()
+                # OCRの日付を優先的に使用
+                if 'ocr_date' in locals() and ocr_date:
+                    date_obj = datetime.fromisoformat(ocr_date.replace('Z', '+00:00'))
+                elif created_at:
+                    date_obj = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                else:
+                    date_obj = datetime.now()
             except:
                 date_obj = datetime.now()
             
