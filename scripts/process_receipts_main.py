@@ -51,9 +51,9 @@ class FreeeClient:
         from datetime import datetime, timedelta
         
         url = f"{self.base_url}/wallet_txns"
-        # 直近90日間のデータを取得（証憑と同じ範囲）
+        # 直近180日間のデータを取得（証憑の日付範囲をカバー）
         now = datetime.now()
-        start_date = (now - timedelta(days=90)).strftime('%Y-%m-%d')
+        start_date = (now - timedelta(days=180)).strftime('%Y-%m-%d')
         end_date = now.strftime('%Y-%m-%d')
         
         params = {
@@ -91,9 +91,9 @@ class FreeeClient:
         from datetime import datetime, timedelta
         
         url = f"{self.base_url}/deals"
-        # 直近90日間のデータを取得（証憑と同じ範囲）
+        # 直近180日間のデータを取得（証憑の日付範囲をカバー）
         now = datetime.now()
-        start_date = (now - timedelta(days=90)).strftime('%Y-%m-%d')
+        start_date = (now - timedelta(days=180)).strftime('%Y-%m-%d')
         end_date = now.strftime('%Y-%m-%d')
         
         params = {

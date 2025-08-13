@@ -126,8 +126,28 @@ def normalize_targets(wallet_txns: List[Dict], deals: List[Dict]) -> List[Dict]:
 
 def find_best_target(ocr: ReceiptRecord, targets: List[Dict], cfg: Dict) -> Optional[Dict]:
     from matcher import match_candidates
+    
+    print(f"  [マッチング] レシート: {ocr.vendor[:20]} / ¥{ocr.amount:,} / {ocr.date}")
+    print(f"  [マッチング] 対象取引: {len(targets)}件")
 
     candidates = match_candidates(ocr, targets, cfg)
-    return candidates[0] if candidates else None
+    
+    if candidates:
+        best = candidates[0]
+        print(f"  [マッチング] ベスト候補: score={best['score']}, 理由={best.get('reasons', [])}")
+        print(f"  [マッチング] デルタ: 金額差={best['deltas']['amount']}円, 名前='{best['deltas']['name'][:30]}'")
+        return best
+    else:
+        print(f"  [マッチング] 候補なし (min_similarity={cfg.get('similarity', {}).get('min_candidate', 0.6)})")
+        
+        # デバッグ: 最初の3件の取引との類似度をチェック
+        from matcher import _normalize_name, _similarity
+        for i, tx in enumerate(targets[:3]):
+            tx_name = _normalize_name(tx.get("description", "") or tx.get("partner_name", ""))
+            ocr_name = _normalize_name(ocr.vendor)
+            sim = _similarity(ocr_name, tx_name)
+            print(f"    取引{i+1}: '{tx.get('description', '')[:30]}' sim={sim:.3f} amount={tx.get('amount', 0)}")
+        
+        return None
 
 
