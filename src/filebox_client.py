@@ -20,24 +20,77 @@ class FileBoxClient:
     def list_receipts(self, limit: int = 50) -> List[Dict]:
         """ファイルボックスからレシート/領収書を取得
         
-        freee APIの証憑管理エンドポイント:
-        - /api/1/expense_application_line_templates (経費科目)
-        - /api/1/expense_applications (経費申請)
-        - /api/1/receipts (証憑) - エンタープライズプランのみ
+        freeeのファイルボックス（証憑管理）:
+        - ファイルボックスは /api/1/receipts エンドポイント
+        - プロフェッショナルプラン以上で利用可能
+        - ベーシックプランでは利用不可（403エラー）
         
-        現在はダミーデータを返す実装
+        38件のファイルがファイルボックスにあることを確認済み
         """
-        print("📌 注意: freeeファイルボックスAPIの正しいエンドポイントを確認中...")
-        print("   freee管理画面でファイルボックスに証憑がアップロードされているか確認してください")
+        print("\n📦 freeeファイルボックスから証憑を取得中...")
+        print("   ダッシュボードで確認: 38件のファイル（未添付）")
         
-        # 様々なエンドポイントを試す
+        # ファイルボックスの正しいエンドポイントを最優先で試す
+        # まず status パラメータなしで試す
+        for status_param in [None, "unlinked", "all"]:
+            try:
+                url = f"{self.base_url}/receipts"
+                params = {"company_id": self.company_id, "limit": limit}
+                
+                if status_param:
+                    params["status"] = status_param
+                    print(f"   📍 /api/1/receipts (status={status_param}) を試行中...")
+                else:
+                    print(f"   📍 /api/1/receipts (statusパラメータなし) を試行中...")
+                    
+                r = requests.get(url, headers=self.headers, params=params)
+                
+                if r.status_code == 200:
+                    data = r.json()
+                    receipts = data.get("receipts", [])
+                    print(f"   ✅ 成功！ {len(receipts)} 件のファイルを取得")
+                    
+                    if receipts:
+                        # 最初の数件の情報を表示
+                        for i, receipt in enumerate(receipts[:3]):
+                            print(f"     [{i+1}] ID: {receipt.get('id')}, "
+                                  f"ファイル名: {receipt.get('file_name', 'N/A')}, "
+                                  f"説明: {receipt.get('description', 'N/A')}")
+                        if len(receipts) > 3:
+                            print(f"     ... 他 {len(receipts) - 3} 件")
+                        return receipts
+                    else:
+                        print("   ⚠️ APIは成功したが、データが0件")
+                        
+                elif r.status_code == 403:
+                    print("   ❌ 403 Forbidden - プランの制限でファイルボックスAPIが利用できません")
+                    print("      → プロフェッショナルプラン以上が必要です")
+                    break  # 403の場合は他のstatusも試さない
+                    
+                elif r.status_code == 400:
+                    print("   ❌ 400 Bad Request - パラメータエラー")
+                    try:
+                        error_data = r.json()
+                        if "errors" in error_data:
+                            for error in error_data["errors"]:
+                                print(f"      - {error.get('message', error)}")
+                        else:
+                            print(f"      エラー詳細: {error_data}")
+                    except:
+                        print(f"      レスポンス: {r.text[:200]}")
+                    
+                else:
+                    print(f"   ❌ エラー: Status {r.status_code}")
+                    
+            except Exception as e:
+                print(f"   ❌ receipts API エラー: {e}")
+        
+        # receipts APIが失敗した場合、他のエンドポイントも試す
+        print("\n   ⚠️ ファイルボックスAPIにアクセスできません。代替方法を試行中...")
+        
         endpoints = [
-            ("receipts", "receipts"),
-            ("expense_applications", "expense_applications"),
-            ("expense_application_line_templates", "expense_application_line_templates"),
-            ("deals", "deals"),  # 取引
-            ("wallet_txns", "wallet_txns"),  # 明細に添付された証憑
-            ("journals", "journals"),  # 仕訳帳
+            ("deals", "deals"),  # 取引（添付ファイル付き）
+            ("wallet_txns", "wallet_txns"),  # 明細
         ]
         
         for endpoint_name, response_key in endpoints:
