@@ -1,0 +1,134 @@
+{
+  "bank_to_vendor": {
+    "コ−ヒ−ロ−ストビバ−チエ": "コーヒーローストビバーチェ",
+    "ヤマト運輸株式会社": "ヤマト運輸",
+    "オ−シ−エス": "OCS",
+    "ANTHROPIC": "ANRESCO JAPAN",
+    "アマゾン": "AMAZON",
+    "グ−グル": "GOOGLE",
+    "マイクロソフト": "MICROSOFT",
+    "AMAZON.CO.JP": "AMAZON",
+    "GOOGLE": "GOOGLE",
+    "セブンイレブン": "セブンイレブン",
+    "ファミマ": "ファミリーマート",
+    "CURSOR, AI POWERED IDE": "CURSOR",
+    "JP.PLAUD.AI": "PLAUD",
+    "CANNABIS JAPAN合同会社": "CANNABIS JAPAN",
+    "株式会社 グリーンブラザーズ・ジャパン": "グリーンブラザーズ・ジャパン",
+    "RECALMO合同会社": "RECALMO",
+    "GRASSLAND TRADING LLC.": "GRASSLAND TRADING LLC",
+    "CHILL SPICE CBD": "CHILL SPICE CBD"
+  },
+  "vendor_to_bank": {
+    "コーヒーローストビバーチェ": [
+      "コ−ヒ−ロ−ストビバ−チエ"
+    ],
+    "ヤマト運輸": [
+      "ヤマト運輸株式会社"
+    ],
+    "OCS": [
+      "オ−シ−エス"
+    ],
+    "ANRESCO JAPAN": [
+      "ANTHROPIC"
+    ],
+    "AMAZON": [
+      "アマゾン",
+      "AMAZON.CO.JP"
+    ],
+    "GOOGLE": [
+      "グ−グル",
+      "GOOGLE"
+    ],
+    "MICROSOFT": [
+      "マイクロソフト"
+    ],
+    "セブンイレブン": [
+      "セブンイレブン"
+    ],
+    "ファミリーマート": [
+      "ファミマ"
+    ],
+    "CURSOR": [
+      "CURSOR, AI POWERED IDE"
+    ],
+    "PLAUD": [
+      "JP.PLAUD.AI"
+    ],
+    "CANNABIS JAPAN": [
+      "CANNABIS JAPAN合同会社"
+    ],
+    "グリーンブラザーズ・ジャパン": [
+      "株式会社 グリーンブラザーズ・ジャパン"
+    ],
+    "RECALMO": [
+      "RECALMO合同会社"
+    ],
+    "GRASSLAND TRADING LLC": [
+      "GRASSLAND TRADING LLC."
+    ],
+    "CHILL SPICE CBD": [
+      "CHILL SPICE CBD"
+    ]
+  },
+  "confidence": {
+    "コ−ヒ−ロ−ストビバ−チエ->コーヒーローストビバーチェ": 0.9,
+    "ヤマト運輸株式会社->ヤマト運輸": 0.98,
+    "オ−シ−エス->OCS": 0.8,
+    "ANTHROPIC->ANRESCO JAPAN": 0.7,
+    "アマゾン->AMAZON": 0.9,
+    "グ−グル->GOOGLE": 0.9,
+    "マイクロソフト->MICROSOFT": 0.9,
+    "AMAZON.CO.JP->AMAZON": 0.85,
+    "GOOGLE->GOOGLE": 0.85,
+    "セブンイレブン->セブンイレブン": 0.9,
+    "ファミマ->ファミリーマート": 0.9,
+    "CURSOR, AI POWERED IDE->CURSOR": 0.75,
+    "JP.PLAUD.AI->PLAUD": 0.7,
+    "CANNABIS JAPAN合同会社->CANNABIS JAPAN": 0.95,
+    "株式会社 グリーンブラザーズ・ジャパン->グリーンブラザーズ・ジャパン": 0.95,
+    "RECALMO合同会社->RECALMO": 0.95,
+    "GRASSLAND TRADING LLC.->GRASSLAND TRADING LLC": 0.95,
+    "CHILL SPICE CBD->CHILL SPICE CBD": 0.95
+  },
+  "last_updated": {
+    "コ−ヒ−ロ−ストビバ−チエ->コーヒーローストビバーチェ": "2025-08-14T01:11:38.172716",
+    "ヤマト運輸株式会社->ヤマト運輸": "2025-08-14T01:11:38.172926",
+    "オ−シ−エス->OCS": "2025-08-14T01:11:38.174790",
+    "ANTHROPIC->ANRESCO JAPAN": "2025-08-14T01:11:38.173278",
+    "アマゾン->AMAZON": "2025-08-14T01:11:38.173388",
+    "グ−グル->GOOGLE": "2025-08-14T01:11:38.173869",
+    "マイクロソフト->MICROSOFT": "2025-08-14T01:11:38.174105",
+    "AMAZON.CO.JP->AMAZON": "2025-08-14T01:11:38.174280",
+    "GOOGLE->GOOGLE": "2025-08-14T01:11:38.174411",
+    "セブンイレブン->セブンイレブン": "2025-08-14T01:11:38.174528",
+    "ファミマ->ファミリーマート": "2025-08-14T01:11:38.174643",
+    "CURSOR, AI POWERED IDE->CURSOR": "2025-08-14T01:11:38.175057",
+    "JP.PLAUD.AI->PLAUD": "2025-08-14T01:11:38.175184",
+    "CANNABIS JAPAN合同会社->CANNABIS JAPAN": "2025-08-14T01:11:38.175311",
+    "株式会社 グリーンブラザーズ・ジャパン->グリーンブラザーズ・ジャパン": "2025-08-14T01:11:38.175439",
+    "RECALMO合同会社->RECALMO": "2025-08-14T01:11:38.175732",
+    "GRASSLAND TRADING LLC.->GRASSLAND TRADING LLC": "2025-08-14T01:11:38.176489",
+    "CHILL SPICE CBD->CHILL SPICE CBD": "2025-08-14T01:11:38.176823"
+  },
+  "success_count": {
+    "コ−ヒ−ロ−ストビバ−チエ->コーヒーローストビバーチェ": 2,
+    "ヤマト運輸株式会社->ヤマト運輸": 1,
+    "オ−シ−エス->OCS": 2,
+    "ANTHROPIC->ANRESCO JAPAN": 1,
+    "アマゾン->AMAZON": 1,
+    "グ−グル->GOOGLE": 1,
+    "マイクロソフト->MICROSOFT": 1,
+    "AMAZON.CO.JP->AMAZON": 1,
+    "GOOGLE->GOOGLE": 1,
+    "セブンイレブン->セブンイレブン": 1,
+    "ファミマ->ファミリーマート": 1,
+    "CURSOR, AI POWERED IDE->CURSOR": 1,
+    "JP.PLAUD.AI->PLAUD": 1,
+    "CANNABIS JAPAN合同会社->CANNABIS JAPAN": 1,
+    "株式会社 グリーンブラザーズ・ジャパン->グリーンブラザーズ・ジャパン": 1,
+    "RECALMO合同会社->RECALMO": 1,
+    "GRASSLAND TRADING LLC.->GRASSLAND TRADING LLC": 1,
+    "CHILL SPICE CBD->CHILL SPICE CBD": 1
+  }
+}

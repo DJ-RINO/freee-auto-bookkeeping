@@ -9,6 +9,7 @@ from state_store import (
     record_file_seen,
     get_existing_for_file_sha1,
 )
+from vendor_mapping_learner import VendorMappingLearner
 
 
 def _receipt_hash(rec: ReceiptRecord, file_digest_hex: str) -> str:
@@ -77,6 +78,23 @@ def ensure_not_duplicated_and_link(
         target_id=str(best_target.get("id")),
         receipt_id=rec.receipt_id,
     )
+    
+    # 成功した場合は学習システムに記録
+    if result:
+        try:
+            learner = VendorMappingLearner()
+            bank_description = best_target.get("description", "") or best_target.get("partner_name", "")
+            confidence = (best_target.get("score", 0) / 100.0)  # スコアを信頼度に変換
+            
+            learner.learn_mapping(
+                bank_description=bank_description,
+                vendor_name=rec.vendor,
+                confidence=confidence
+            )
+            print(f"  🧠 マッピング学習完了: '{bank_description}' -> '{rec.vendor}' (信頼度: {confidence:.2f})")
+        except Exception as e:
+            print(f"  ⚠️ 学習エラー: {e}")
+    
     mark_linked(
         rh,
         {

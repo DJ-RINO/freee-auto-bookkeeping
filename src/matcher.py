@@ -5,6 +5,7 @@ from typing import Dict, List, Tuple
 from rapidfuzz.distance import JaroWinkler
 
 from ocr_models import ReceiptRecord, MatchCandidate
+from vendor_mapping_learner import VendorMappingLearner
 
 
 def _normalize_name(text: str) -> str:
@@ -94,16 +95,41 @@ def score_match(ocr: ReceiptRecord, tx: Dict, cfg: Dict) -> Tuple[int, List[str]
 def match_candidates(ocr_receipt: ReceiptRecord, tx_list: List[Dict], cfg: Dict) -> List[Dict]:
     # より多くの候補を評価するため前段フィルターを緩和
     min_sim = cfg.get("similarity", {}).get("min_candidate", 0.3)
+    
+    # 学習システムを初期化
+    learner = VendorMappingLearner()
+    
     candidates: List[Dict] = []
     for tx in tx_list:
-        # quick prefilter
-        if _similarity(_normalize_name(ocr_receipt.vendor), _normalize_name(tx.get("description", "") or tx.get("partner_name", ""))) < min_sim:
+        tx_description = tx.get("description", "") or tx.get("partner_name", "")
+        
+        # 1. 学習データからの候補チェック
+        learned_candidates = learner.get_vendor_candidates(tx_description)
+        learned_bonus = 0
+        for learned_candidate in learned_candidates:
+            if _similarity(_normalize_name(ocr_receipt.vendor), _normalize_name(learned_candidate["vendor_name"])) > 0.7:
+                learned_bonus = learned_candidate["confidence"] * 30  # 最大30点のボーナス
+                print(f"    🧠 学習データマッチ: '{tx_description}' -> '{learned_candidate['vendor_name']}' (+{learned_bonus:.0f}点)")
+                break
+        
+        # 2. 通常の類似度フィルター（学習ボーナスがあれば緩和）
+        base_similarity = _similarity(_normalize_name(ocr_receipt.vendor), _normalize_name(tx_description))
+        if base_similarity < min_sim and learned_bonus == 0:
             continue
+            
+        # 3. スコア計算
         score, reasons = score_match(ocr_receipt, tx, cfg)
+        
+        # 4. 学習ボーナスを加算
+        if learned_bonus > 0:
+            score = min(100, score + learned_bonus)
+            reasons.append(f"learned_bonus=+{learned_bonus:.0f}")
+        
         deltas = {
             "amount": abs(ocr_receipt.amount - abs(tx.get("amount", 0))),
             "date": tx.get("date"),
-            "name": tx.get("description") or tx.get("partner_name"),
+            "name": tx_description,
+            "learned_bonus": learned_bonus
         }
         candidates.append({"tx_id": str(tx.get("id")), "score": score, "reasons": reasons, "deltas": deltas})
 
