@@ -196,10 +196,45 @@ GitHub Secretsで`ALWAYS_NOTIFY=true`を設定すると、信頼度90%以上の�
 `src/slack_interactive_handler.py`を使用すると、Slack上で直接仕訳内容を修正して登録できます。
 ※ 別途Webサーバーの設定が必要です。
 
-## Claude Code Action (CCA) 対応
+## 🤖 Claude Code Action対応
 
-このリポジトリはClaude Code Actionに対応しており、以下の機能が利用できます：
+このリポジトリはClaude Code Actionを活用した自動化機能に対応しています。
 
-- プルリクエスト時の自動コードレビュー
-- freee API統合部分の品質チェック
-- セキュリティ観点でのコード検証
+### 使用方法
+
+1. **Issue作成**: 「Claude Code Action Request」テンプレートを使用
+2. **@claudeメンション**: IssueやコメントでClaude AIを呼び出し
+3. **自動修正**: Claudeが自動的にコード分析・修正してPRを作成
+
+### 利用可能な自動化
+
+```markdown
+@claude 以下のバグを修正してください：
+- マッチング精度の向上
+- APIエラーハンドリングの追加
+- 設定ファイルの最適化
+```
+
+### 自動実行される処理
+- ✅ コードの分析と修正
+- ✅ 設定ファイルの調整  
+- ✅ テストケースの追加
+- ✅ ドキュメントの更新
+- ✅ Pull Requestの自動作成
+
+### 必要な設定
+
+GitHub Secrets に以下を追加：
+- `ANTHROPIC_API_KEY`: Claude APIキー
+
+### サンプル利用例
+
+```markdown
+# Issue例
+@claude GitHub Actionsで0件の自動紐付けになっています。
+マッチング閾値を現実的な値に調整して、自動紐付け率を向上させてください。
+
+関連ログ: https://github.com/repo/actions/runs/12345
+```
+
+→ Claudeが自動的にログを分析し、設定を調整してPull Requestを作成

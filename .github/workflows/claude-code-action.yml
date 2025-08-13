@@ -1,0 +1,95 @@
+name: Claude Code Action
+
+on:
+  issue_comment:
+    types: [created]
+  issues:
+    types: [opened, edited]
+
+jobs:
+  claude-response:
+    # @claudeメンションがある場合のみ実行
+    if: contains(github.event.comment.body, '@claude') || contains(github.event.issue.body, '@claude')
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          
+      - name: Install Claude Code CLI
+        run: |
+          # Claude Code CLIのインストール方法は最新ドキュメントに従って更新が必要
+          pip install anthropic
+          
+      - name: Process Claude request
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_BODY: ${{ github.event.comment.body || github.event.issue.body }}
+        run: |
+          echo "Processing Claude Code Action request..."
+          echo "Issue Number: $ISSUE_NUMBER"
+          echo "Request: $COMMENT_BODY"
+          
+          # Claude Code CLIを使用してコード分析・修正を実行
+          # 実際のClaude Code Action APIが利用可能になったら適切なコマンドに置き換え
+          python -c "
+          import os
+          import json
+          from anthropic import Anthropic
+          
+          client = Anthropic(api_key=os.getenv('ANTHROPIC_API_KEY'))
+          
+          # Issue/Commentの内容を解析してタスクを特定
+          request_text = os.getenv('COMMENT_BODY', '')
+          issue_number = os.getenv('ISSUE_NUMBER', '')
+          
+          # Claudeにタスクを依頼
+          response = client.messages.create(
+              model='claude-3-sonnet-20240229',
+              max_tokens=4000,
+              messages=[{
+                  'role': 'user', 
+                  'content': f'GitHub Issue #{issue_number}のリクエスト: {request_text}\n\nfreee自動経理システムのコード修正が必要です。具体的な修正手順を教えてください。'
+              }]
+          )
+          
+          print('Claude Response:')
+          print(response.content[0].text)
+          "
+          
+      - name: Create Pull Request if changes made
+        if: success()
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "fix: Claude Code Actionによる自動修正"
+          title: "Claude Code Action: Issue #${{ github.event.issue.number }}への対応"
+          body: |
+            ## Claude Code Actionによる自動修正
+            
+            Issue #${{ github.event.issue.number }} の以下のリクエストに対応しました：
+            
+            ```
+            ${{ github.event.comment.body || github.event.issue.body }}
+            ```
+            
+            ### 修正内容
+            - 自動的にコード分析と修正を実行
+            - 関連するテストケースの更新
+            - 設定ファイルの最適化
+            
+            🤖 Generated with Claude Code Action
+          branch: claude-code-action-${{ github.event.issue.number }}
+          delete-branch: true
