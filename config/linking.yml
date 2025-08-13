@@ -1,23 +1,23 @@
 # Receipt linking configuration
 thresholds:
-  auto: 85
-  assist_min: 65
-  assist_max: 84
+  auto: 70        # 実用的な閾値に調整（学習システム適用後）
+  assist_min: 50  # 人間の判断が必要な範囲
+  assist_max: 69
 
 tolerances:
-  amount_jpy: 1
-  days: 3
+  amount_jpy: 1000  # ¥1000または5%の大きい方（matcher.pyに合わせる）
+  days: 45          # 1.5ヶ月の許容範囲
 
 weights:
-  amount: 0.4
-  date: 0.25
-  name: 0.3
+  amount: 0.5     # 金額の重要度を上げる
+  date: 0.1       # 日付の重要度を下げる（請求/支払日のずれ考慮）
+  name: 0.35      # 名前マッチングを重視
   tax_rate: 0.05
 
 similarity:
   name_algo: jaro_winkler
   high_mark: 0.85
-  min_candidate: 0.6
+  min_candidate: 0.3  # より多くの候補を評価（matcher.pyに合わせる）
 
 ng_words:
   - 振込

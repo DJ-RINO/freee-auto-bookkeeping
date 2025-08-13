@@ -103,14 +103,15 @@ def match_candidates(ocr_receipt: ReceiptRecord, tx_list: List[Dict], cfg: Dict)
     for tx in tx_list:
         tx_description = tx.get("description", "") or tx.get("partner_name", "")
         
-        # 1. 学習データからの候補チェック
-        learned_candidates = learner.get_vendor_candidates(tx_description)
+        # 1. 学習データからの候補チェック（空の場合はスキップ）
         learned_bonus = 0
-        for learned_candidate in learned_candidates:
-            if _similarity(_normalize_name(ocr_receipt.vendor), _normalize_name(learned_candidate["vendor_name"])) > 0.7:
-                learned_bonus = learned_candidate["confidence"] * 30  # 最大30点のボーナス
-                print(f"    🧠 学習データマッチ: '{tx_description}' -> '{learned_candidate['vendor_name']}' (+{learned_bonus:.0f}点)")
-                break
+        if tx_description and tx_description.strip() and tx_description != "None":
+            learned_candidates = learner.get_vendor_candidates(tx_description)
+            for learned_candidate in learned_candidates:
+                if _similarity(_normalize_name(ocr_receipt.vendor), _normalize_name(learned_candidate["vendor_name"])) > 0.7:
+                    learned_bonus = learned_candidate["confidence"] * 30  # 最大30点のボーナス
+                    print(f"    🧠 学習データマッチ: '{tx_description}' -> '{learned_candidate['vendor_name']}' (+{learned_bonus:.0f}点)")
+                    break
         
         # 2. 通常の類似度フィルター（学習ボーナスがあれば緩和）
         base_similarity = _similarity(_normalize_name(ocr_receipt.vendor), _normalize_name(tx_description))
