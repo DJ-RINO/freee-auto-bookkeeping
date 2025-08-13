@@ -30,18 +30,28 @@ class FileBoxClient:
         print("\n📦 freeeファイルボックスから証憑を取得中...")
         print("   ダッシュボードで確認: 38件のファイル（未添付）")
         
+        # 日付パラメータを追加（過去3ヶ月分を取得）
+        from datetime import datetime, timedelta
+        end_date = datetime.now().date()
+        start_date = end_date - timedelta(days=90)
+        
         # ファイルボックスの正しいエンドポイントを最優先で試す
         # まず status パラメータなしで試す
         for status_param in [None, "unlinked", "all"]:
             try:
                 url = f"{self.base_url}/receipts"
-                params = {"company_id": self.company_id, "limit": limit}
+                params = {
+                    "company_id": self.company_id, 
+                    "limit": limit,
+                    "start_date": start_date.isoformat(),
+                    "end_date": end_date.isoformat()
+                }
                 
                 if status_param:
                     params["status"] = status_param
-                    print(f"   📍 /api/1/receipts (status={status_param}) を試行中...")
+                    print(f"   📍 /api/1/receipts (status={status_param}, {start_date} ~ {end_date}) を試行中...")
                 else:
-                    print(f"   📍 /api/1/receipts (statusパラメータなし) を試行中...")
+                    print(f"   📍 /api/1/receipts (statusパラメータなし, {start_date} ~ {end_date}) を試行中...")
                     
                 r = requests.get(url, headers=self.headers, params=params)
                 
