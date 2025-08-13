@@ -263,8 +263,10 @@ def main():
             receipt_status = receipt.get("status", "")
             
             # デバッグ: レシートデータを表示
-            if i == 0:  # 最初の1件だけ詳細表示
+            if i == 1:  # 最初の1件だけ詳細表示
                 print(f"  [デバッグ] レシートデータキー: {list(receipt.keys())}")
+                print(f"  [デバッグ] amount={receipt_amount}, file_name='{file_name}', memo='{memo}', description='{description}'")
+                print(f"  [デバッグ] user_name='{user_name}', status='{receipt_status}'")
             
             # 金額の取得（優先順位： receipt_amount > ファイル名/メモから抽出）
             amount = receipt_amount
@@ -302,6 +304,10 @@ def main():
             # vendorが空の場合はレシートIDを使用
             if not vendor:
                 vendor = f"レシート#{receipt_id}"
+                
+            # 金額が0円の場合の警告
+            if amount == 0 and i == 1:
+                print("  ⚠️ 金額情報が取得できませんでした。freee管理画面で証憑のOCR処理が完了しているか確認してください。")
             
             # レシートレコード作成
             rec = ReceiptRecord(

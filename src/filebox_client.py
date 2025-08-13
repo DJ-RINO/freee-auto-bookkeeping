@@ -204,6 +204,23 @@ class FileBoxClient:
         
         return []
 
+    def get_receipt_detail(self, receipt_id: int) -> Optional[Dict]:
+        """証憑の詳細情報を取得"""
+        try:
+            url = f"{self.base_url}/receipts/{receipt_id}"
+            params = {"company_id": self.company_id}
+            r = requests.get(url, headers=self.headers, params=params)
+            
+            if r.status_code == 200:
+                data = r.json()
+                return data.get("receipt", {})
+            else:
+                print(f"  ⚠️ 証憑詳細取得エラー: {r.status_code}")
+                return None
+        except Exception as e:
+            print(f"  ⚠️ 証憑詳細取得例外: {e}")
+            return None
+    
     def download_receipt(self, receipt_id: int) -> bytes:
         """レシート/領収書ファイルをダウンロード"""
         # まず receipts エンドポイントを試す
