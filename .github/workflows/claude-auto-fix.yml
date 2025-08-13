@@ -1,0 +1,147 @@
+name: Claude Auto Fix System
+
+on:
+  issues:
+    types: [opened, edited]
+  issue_comment:
+    types: [created]
+
+jobs:
+  claude-auto-fix:
+    if: contains(github.event.issue.body, '@claude') || contains(github.event.comment.body, '@claude')
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          
+      - name: Install dependencies
+        run: |
+          pip install anthropic requests PyYAML
+          
+      - name: Claude Auto Fix
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REQUEST_TEXT: ${{ github.event.issue.body || github.event.comment.body }}
+          REPO_NAME: ${{ github.repository }}
+        run: |
+          python << 'EOF'
+          import os
+          import subprocess
+          import json
+          from anthropic import Anthropic
+
+          # 設定
+          api_key = os.getenv('ANTHROPIC_API_KEY')
+          issue_number = os.getenv('ISSUE_NUMBER')
+          request_text = os.getenv('REQUEST_TEXT', '')
+          repo_name = os.getenv('REPO_NAME')
+
+          print(f"🤖 Claude Auto Fix System - Issue #{issue_number}")
+          print(f"📋 Request: {request_text[:100]}...")
+
+          if not api_key:
+              print("❌ ANTHROPIC_API_KEY not found")
+              exit(1)
+
+          try:
+              # Claude APIクライアント初期化
+              client = Anthropic(api_key=api_key)
+              
+              # freee自動経理システムの問題分析プロンプト
+              system_prompt = """
+              あなたはfreee自動経理システムの専門エンジニアです。
+              GitHub Actionsのログを分析し、以下の問題を自動修正してください：
+              
+              1. 学習システムの過剰反応（"None"マッチング）
+              2. マッチング閾値の現実的調整
+              3. 自動紐付け率の向上（0%→20%以上）
+              4. エラーログの削減
+              
+              具体的な修正手順とコードを提案してください。
+              """
+              
+              user_prompt = f"""
+              freee自動経理システムで以下の問題が発生しています：
+              
+              {request_text}
+              
+              関連GitHub Actions: https://github.com/{repo_name}/actions
+              
+              以下のファイルを修正して問題を解決してください：
+              - src/matcher.py (学習システム改善)
+              - config/linking.yml (閾値調整)
+              - src/vendor_mapping_learner.py (データ品質向上)
+              
+              具体的な修正コードを提案してください。
+              """
+
+              # Claude APIで修正案を取得
+              response = client.messages.create(
+                  model="claude-3-5-sonnet-20241022",
+                  max_tokens=4000,
+                  messages=[
+                      {"role": "user", "content": system_prompt + "\n\n" + user_prompt}
+                  ]
+              )
+              
+              fix_suggestion = response.content[0].text
+              print("✅ Claude修正案:")
+              print(fix_suggestion)
+              
+              # GitHub Issue コメントとして修正案を投稿
+              import requests
+              
+              comment_body = f"""
+              ## 🤖 Claude Auto Fix Analysis
+              
+              Issue #{issue_number} の問題を分析しました。
+              
+              ### 📊 問題特定
+              - 学習システムの "None" 過剰反応
+              - マッチング閾値が高すぎる (70点)
+              - 自動紐付け率: 0%
+              
+              ### 🛠️ 修正提案
+              {fix_suggestion}
+              
+              ### 🚀 実行方法
+              上記の修正を適用するには、新しいPull Requestを作成します。
+              
+              ---
+              Generated with Claude Auto Fix System
+              """
+              
+              # GitHub APIでコメント投稿
+              github_token = os.getenv('GITHUB_TOKEN')
+              headers = {
+                  'Authorization': f'token {github_token}',
+                  'Accept': 'application/vnd.github.v3+json'
+              }
+              
+              comment_url = f"https://api.github.com/repos/{repo_name}/issues/{issue_number}/comments"
+              comment_data = {"body": comment_body}
+              
+              response = requests.post(comment_url, headers=headers, json=comment_data)
+              
+              if response.status_code == 201:
+                  print("✅ GitHub Issue コメント投稿完了")
+              else:
+                  print(f"❌ コメント投稿失敗: {response.status_code}")
+              
+          except Exception as e:
+              print(f"❌ エラー: {e}")
+              exit(1)
+          EOF
