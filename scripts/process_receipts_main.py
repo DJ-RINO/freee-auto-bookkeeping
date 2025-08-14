@@ -10,19 +10,57 @@ import json
 from datetime import datetime
 import uuid
 
-# Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+# Add src to path with multiple fallback methods
+import os
+import sys
 
-from token_manager import integrate_with_main
-from state_store import init_db, write_audit
-from config_loader import load_linking_config
-from filebox_client import FileBoxClient
-from ocr_models import ReceiptRecord
-from linker import find_best_target, normalize_targets, ensure_not_duplicated_and_link, decide_action
-from slack_notifier import SlackInteractiveNotifier, ReceiptNotification, send_batch_summary, send_confirmation_batch
-from state_store import put_pending
-from execution_lock import ExecutionLock, NotificationDeduplicator
-from ai_ocr_enhancer import AIReceiptEnhancer
+# Method 1: Relative path from script location
+script_dir = os.path.dirname(__file__)
+src_path = os.path.join(script_dir, '..', 'src')
+src_path = os.path.abspath(src_path)
+
+# Method 2: From current working directory
+cwd_src_path = os.path.join(os.getcwd(), 'src')
+
+# Method 3: Direct path for GitHub Actions
+direct_src_path = '/home/runner/work/freee-auto-bookkeeping/freee-auto-bookkeeping/src'
+
+# Add all possible paths
+for path in [src_path, cwd_src_path, direct_src_path]:
+    if os.path.exists(path) and path not in sys.path:
+        sys.path.insert(0, path)
+        
+print(f"Python path: {sys.path[:3]}...")  # Debug info
+
+try:
+    from token_manager import integrate_with_main
+    from state_store import init_db, write_audit, put_pending
+    from config_loader import load_linking_config
+    from filebox_client import FileBoxClient
+    from ocr_models import ReceiptRecord
+    from linker import find_best_target, normalize_targets, ensure_not_duplicated_and_link, decide_action
+    from slack_notifier import SlackInteractiveNotifier, ReceiptNotification, send_batch_summary, send_confirmation_batch
+    from execution_lock import ExecutionLock, NotificationDeduplicator
+    from ai_ocr_enhancer import AIReceiptEnhancer
+    print("✅ All imports successful")
+except ImportError as e:
+    print(f"❌ Import error: {e}")
+    print(f"Current working directory: {os.getcwd()}")
+    print(f"Script directory: {os.path.dirname(__file__)}")
+    print(f"Python paths: {sys.path[:5]}")
+    
+    # Try alternative import strategy
+    try:
+        # Add current directory to path as fallback
+        sys.path.insert(0, os.getcwd())
+        from src.slack_notifier import SlackInteractiveNotifier, ReceiptNotification, send_batch_summary, send_confirmation_batch
+        from src.state_store import put_pending
+        from src.execution_lock import ExecutionLock, NotificationDeduplicator
+        from src.ai_ocr_enhancer import AIReceiptEnhancer
+        print("✅ Alternative import successful")
+    except ImportError as e2:
+        print(f"❌ Alternative import failed: {e2}")
+        raise
 
 def should_send_individual_notification(context: str = "") -> bool:
     """個別通知送信判定
