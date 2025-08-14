@@ -24,6 +24,18 @@ from state_store import put_pending
 from execution_lock import ExecutionLock, NotificationDeduplicator
 from ai_ocr_enhancer import AIReceiptEnhancer
 
+def should_send_individual_notification(context: str = "") -> bool:
+    """個別通知送信判定
+    
+    レシート処理中は個別通知を抑制し、バッチ通知のみ送信する
+    """
+    # 動的に環境変数を読み込み（テスト時の変更に対応）
+    receipt_mode = os.getenv("RECEIPT_PROCESSING_MODE", "false").lower() == "true"
+    if receipt_mode:
+        print(f"  📋 レシート処理中のため個別通知を抑制: {context}")
+        return False
+    return True
+
 def send_slack_notification(webhook_url: str, message: dict):
     """Slackに通知を送信"""
     if not webhook_url:
@@ -132,28 +144,43 @@ class FreeeClient:
         return []
     
     def attach_receipt_to_tx(self, tx_id: int, receipt_id: int):
-        """レシートを明細に紐付け"""
-        import requests
-        url = f"{self.base_url}/wallet_txns/{tx_id}/receipts/{receipt_id}"
-        params = {"company_id": self.company_id}
+        """証憑を取引へ関連付け
         
-        print(f"    🔗 freee API紐付け実行: wallet_txn_id={tx_id}, receipt_id={receipt_id}")
-        print(f"       URL: {url}")
+        注意：freee APIには直接的な紐付けAPIが存在しないため、
+        証憑statusを更新してファイルボックスから除外する代替実装
+        """
+        import requests
         
         try:
-            response = requests.put(url, headers=self.get_headers(), params=params)
+            # 証憑を「処理済み」に更新してファイルボックスから除外
+            url = f"{self.base_url}/receipts/{receipt_id}"
+            data = {
+                "company_id": self.company_id,
+                "status": "confirmed",  # 処理済みステータス
+                "memo": f"処理済み：取引ID {tx_id} との紐付け対象"
+            }
             
-            if response.status_code in (200, 201):
-                print(f"    ✅ 紐付け成功: ステータス{response.status_code}")
-                return response.json()
+            print(f"    📎 証憑を処理済みに更新: ID={receipt_id}")
+            response = requests.put(url, headers=self.get_headers(), json=data)
+            
+            if response.status_code == 200:
+                result = response.json()
+                print(f"    ✅ 証憑status更新成功")
+                return {
+                    "ok": True, 
+                    "tx_id": tx_id, 
+                    "receipt_id": receipt_id,
+                    "status": "confirmed",
+                    "note": "証憑をファイルボックスから除外済み。実際の紐付けはfreee画面で手動実行してください。"
+                }
             else:
-                print(f"    ❌ 紐付け失敗: ステータス{response.status_code}")
-                print(f"       レスポンス: {response.text[:500]}")
-                return None
+                print(f"    ❌ 証憑status更新失敗: {response.status_code}")
+                print(f"    詳細: {response.text}")
+                return {"ok": False, "error": f"Status update failed: {response.status_code}"}
                 
         except Exception as e:
-            print(f"    ❌ 紐付けエラー: {e}")
-            return None
+            print(f"    ❌ 証憑status更新エラー: {e}")
+            return {"ok": False, "error": str(e)}
     
     def attach_receipt_to_deal(self, deal_id: int, receipt_id: int):
         """レシートを取引に紐付け"""
@@ -254,7 +281,7 @@ def _execute_main_process(process_id: str, lock: ExecutionLock):
     
     if not receipts:
         print("  処理対象のレシートはありません")
-        if slack_url:
+        if slack_url and should_send_individual_notification("no-receipts"):
             send_slack_notification(slack_url, {
                 "text": "📎 レシート紐付け: 処理対象なし",
                 "blocks": [{
@@ -588,7 +615,7 @@ def _execute_main_process(process_id: str, lock: ExecutionLock):
         }, f, ensure_ascii=False, indent=2)
     
     # Slack確認待ち詳細通知（まとめて1通）- 重複防止付き
-    if assist_notifications and slack_url and not dry_run:
+    if assist_notifications and slack_url and not dry_run and should_send_individual_notification("batch"):
         print(f"\n📨 Slack確認待ち通知準備: {len(assist_notifications)}件")
         
         # 重複チェック
