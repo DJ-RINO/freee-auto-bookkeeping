@@ -1,14 +1,11 @@
 name: Claude Auto Fix System
 
 on:
-  issues:
-    types: [opened, edited]
-  issue_comment:
-    types: [created]
+  workflow_dispatch: # Manual trigger only - disabled to avoid conflicts
 
 jobs:
   claude-auto-fix:
-    if: contains(github.event.issue.body, '@claude') || contains(github.event.comment.body, '@claude')
+    if: false  # Completely disabled - use official Claude Code Action instead
     runs-on: ubuntu-latest
     
     permissions:
@@ -32,7 +29,7 @@ jobs:
       - name: Claude Auto Fix
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           ISSUE_NUMBER: ${{ github.event.issue.number }}
           REQUEST_TEXT: ${{ github.event.issue.body || github.event.comment.body }}
           REPO_NAME: ${{ github.repository }}
