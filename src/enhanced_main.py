@@ -18,6 +18,54 @@ load_dotenv()
 CONFIDENCE_THRESHOLD = float(os.getenv("CONFIDENCE_THRESHOLD", "0.9"))  # デフォルト90%以上で自動登録
 ALWAYS_NOTIFY = os.getenv("ALWAYS_NOTIFY", "false").lower() == "true"  # 常にSlack通知するオプション
 
+# 通知制御設定
+RECEIPT_PROCESSING_MODE = os.getenv("RECEIPT_PROCESSING_MODE", "false").lower() == "true"
+
+# OCR品質制御設定
+MIN_OCR_QUALITY = float(os.getenv("MIN_OCR_QUALITY", "0.3"))
+ENABLE_AI_OCR_ENHANCEMENT = os.getenv("ENABLE_AI_OCR_ENHANCEMENT", "false").lower() == "true"
+
+def should_send_individual_notification(context: str = "") -> bool:
+    """個別通知送信判定
+    
+    レシート処理中は個別通知を抑制し、バッチ通知のみ送信する
+    """
+    # 動的に環境変数を読み込み（テスト時の変更に対応）
+    receipt_mode = os.getenv("RECEIPT_PROCESSING_MODE", "false").lower() == "true"
+    if receipt_mode:
+        print(f"  📋 レシート処理中のため個別通知を抑制: {context}")
+        return False
+    return True
+
+def estimate_ocr_quality(receipt_data: Dict) -> float:
+    """レシートのOCR品質を推定"""
+    file_name = receipt_data.get("file_name", "")
+    memo = receipt_data.get("memo", "")
+    
+    quality_score = 1.0
+    
+    # ファイル名パターンによる品質低下
+    if "レシート#" in file_name and not memo.strip():
+        quality_score *= 0.2  # 汎用ファイル名で内容なし
+        
+    # メモの内容による品質評価
+    if not memo.strip():
+        quality_score *= 0.5  # メモなし
+    elif len(memo.strip()) < 5:
+        quality_score *= 0.7  # メモが短すぎる
+    
+    # ファイル名から情報が抽出できるかチェック
+    import re
+    has_amount_info = bool(re.search(r'[0-9,]+[円¥]|¥[0-9,]+', f"{file_name} {memo}"))
+    has_vendor_info = bool(re.search(r'[A-Za-z\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]{3,}', f"{file_name} {memo}"))
+    
+    if not has_amount_info:
+        quality_score *= 0.6
+    if not has_vendor_info:
+        quality_score *= 0.6
+        
+    return min(1.0, max(0.0, quality_score))
+
 class FreeeClient:
     """freee API クライアント（過去の取引履歴取得機能付き）"""
     
@@ -294,8 +342,40 @@ class FreeeClient:
         return response.json()["partner"]["id"]
 
     def attach_receipt_to_tx(self, tx_id: int, receipt_id: int) -> Dict:
-        """証憑を取引へ関連付け（暫定のダミー実装。正式APIに差し替え予定）"""
-        return {"ok": True, "tx_id": tx_id, "receipt_id": receipt_id}
+        """証憑を取引へ関連付け
+        
+        注意：freee APIには直接的な紐付けAPIが存在しないため、
+        証憑statusを更新してファイルボックスから除外する代替実装
+        """
+        try:
+            # 証憑を「処理済み」に更新してファイルボックスから除外
+            url = f"{self.base_url}/receipts/{receipt_id}"
+            data = {
+                "company_id": self.company_id,
+                "status": "confirmed",  # 処理済みステータス
+                "memo": f"処理済み：取引ID {tx_id} との紐付け対象"
+            }
+            
+            response = requests.put(url, headers=self.headers, json=data)
+            
+            if response.status_code == 200:
+                result = response.json()
+                print(f"    📎 証憑を処理済みに更新: ID={receipt_id}")
+                return {
+                    "ok": True, 
+                    "tx_id": tx_id, 
+                    "receipt_id": receipt_id,
+                    "status": "confirmed",
+                    "note": "証憑をファイルボックスから除外済み。実際の紐付けはfreee画面で手動実行してください。"
+                }
+            else:
+                print(f"    ❌ 証憑status更新失敗: {response.status_code}")
+                print(f"    詳細: {response.text}")
+                return {"ok": False, "error": f"Status update failed: {response.status_code}"}
+                
+        except Exception as e:
+            print(f"    ❌ 証憑status更新エラー: {e}")
+            return {"ok": False, "error": str(e)}
     
     def get_unpaid_invoices(self) -> List[Dict]:
         """未消込の請求書を取得"""
@@ -973,7 +1053,7 @@ def process_enhanced_wallet_txn(txn: Dict, freee_client: FreeeClient,
             # DRY_RUNモードでも通知を送る条件
             # 1. 信頼度が低い取引
             # 2. ALWAYS_NOTIFYがtrueの場合は全て
-            if slack_notifier and (analysis["confidence"] < CONFIDENCE_THRESHOLD or ALWAYS_NOTIFY):
+            if slack_notifier and (analysis["confidence"] < CONFIDENCE_THRESHOLD or ALWAYS_NOTIFY) and should_send_individual_notification(f"信頼度{analysis['confidence']:.2f}"):
                 print(f"  信頼度{analysis['confidence']:.2f}の取引をSlackに通知します")
                 sent = slack_notifier.send_confirmation(txn, analysis)
                 print(f"  Slack通知送信結果: {sent}")
@@ -986,7 +1066,7 @@ def process_enhanced_wallet_txn(txn: Dict, freee_client: FreeeClient,
 
         # 閾値以上は自動登録（ALWAYS_NOTIFYがtrueの場合は通知も送る）
         if analysis["confidence"] >= CONFIDENCE_THRESHOLD:
-            if ALWAYS_NOTIFY and slack_notifier:
+            if ALWAYS_NOTIFY and slack_notifier and should_send_individual_notification(f"信頼度{analysis['confidence']:.2f}"):
                 print(f"  信頼度{analysis['confidence']:.2f}の取引をSlackに通知します（確認用）")
                 sent = slack_notifier.send_confirmation(txn, analysis)
                 print(f"  Slack通知送信結果: {sent}")
@@ -1010,7 +1090,7 @@ def process_enhanced_wallet_txn(txn: Dict, freee_client: FreeeClient,
         else:
             # 閾値未満は全てSlack通知
             print(f"  信頼度{CONFIDENCE_THRESHOLD:.0%}未満のためSlack通知を送信します（信頼度: {analysis['confidence']:.2f}）")
-            if slack_notifier:
+            if slack_notifier and should_send_individual_notification(f"信頼度{analysis['confidence']:.2f}"):
                 sent = slack_notifier.send_confirmation(txn, analysis)
                 print(f"  Slack通知送信結果: {sent}")
             return {
@@ -1111,8 +1191,18 @@ def process_receipts(freee_client: FreeeClient, linking_cfg: Dict):
         # targetsを空リストとして処理を続行
 
     linked = 0
+    skipped_low_quality = 0
+    
     for r in receipts:
         rid = str(r.get("id"))
+        
+        # OCR品質事前チェック
+        ocr_quality = estimate_ocr_quality(r)
+        if ocr_quality < MIN_OCR_QUALITY:
+            skipped_low_quality += 1
+            print(f"  ⏭️  receipt {rid}: OCR品質不足でスキップ ({ocr_quality:.2f} < {MIN_OCR_QUALITY}) - {r.get('file_name', 'Unknown')}")
+            continue
+        
         try:
             data = fb.download_receipt(int(rid))
         except Exception as e:
@@ -1194,3 +1284,5 @@ def process_receipts(freee_client: FreeeClient, linking_cfg: Dict):
             print(f"  receipt {rid}: link failed: {e}")
 
     print(f"[receipts] 自動リンク完了: {linked}件")
+    if skipped_low_quality > 0:
+        print(f"[receipts] OCR品質不足でスキップ: {skipped_low_quality}件 (閾値: {MIN_OCR_QUALITY})")

@@ -63,6 +63,9 @@ jobs:
         TRANSACTION_LIMIT: ${{ github.event.inputs.limit || '100' }}
         ALWAYS_NOTIFY: ${{ secrets.ALWAYS_NOTIFY || 'false' }}
         USE_ENHANCED_MODE: ${{ secrets.USE_ENHANCED_MODE || 'false' }}
+        RECEIPT_PROCESSING_MODE: 'true'  # レシート処理中は個別通知を抑制
+        MIN_OCR_QUALITY: '0.1'  # OCR品質の最低閾値（緊急修正：0.3→0.1に緩和）
+        ENABLE_AI_OCR_ENHANCEMENT: 'false'  # AI OCR改善機能（未実装）
       run: |
         pip install pynacl  # トークン暗号化用
         if [ "$USE_ENHANCED_MODE" = "true" ]; then

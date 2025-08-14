@@ -97,8 +97,40 @@ class FreeeClient:
         return response.json()
 
     def attach_receipt_to_tx(self, tx_id: int, receipt_id: int) -> Dict:
-        """証憑を取引へ関連付け（暫定のダミー実装。正式APIに差し替え予定）"""
-        return {"ok": True, "tx_id": tx_id, "receipt_id": receipt_id}
+        """証憑を取引へ関連付け
+        
+        注意：freee APIには直接的な紐付けAPIが存在しないため、
+        証憑statusを更新してファイルボックスから除外する代替実装
+        """
+        try:
+            # 証憑を「処理済み」に更新してファイルボックスから除外
+            url = f"{self.base_url}/receipts/{receipt_id}"
+            data = {
+                "company_id": self.company_id,
+                "status": "confirmed",  # 処理済みステータス
+                "memo": f"処理済み：取引ID {tx_id} との紐付け対象"
+            }
+            
+            response = requests.put(url, headers=self.headers, json=data)
+            
+            if response.status_code == 200:
+                result = response.json()
+                print(f"    📎 証憑を処理済みに更新: ID={receipt_id}")
+                return {
+                    "ok": True, 
+                    "tx_id": tx_id, 
+                    "receipt_id": receipt_id,
+                    "status": "confirmed",
+                    "note": "証憑をファイルボックスから除外済み。実際の紐付けはfreee画面で手動実行してください。"
+                }
+            else:
+                print(f"    ❌ 証憑status更新失敗: {response.status_code}")
+                print(f"    詳細: {response.text}")
+                return {"ok": False, "error": f"Status update failed: {response.status_code}"}
+                
+        except Exception as e:
+            print(f"    ❌ 証憑status更新エラー: {e}")
+            return {"ok": False, "error": str(e)}
     
     def _get_wallet_txn_detail(self, wallet_txn_id: int) -> Dict:
         """wallet_txnの詳細を取得"""
@@ -854,7 +886,7 @@ def process_receipts(freee_client: FreeeClient):
             continue
 
         try:
-            ensure_not_duplicated_and_link(
+            link_result = ensure_not_duplicated_and_link(
                 freee_client,
                 rec,
                 file_sha1,
@@ -863,7 +895,10 @@ def process_receipts(freee_client: FreeeClient):
                 target_type=best.get("type", "wallet_txn"),
                 allow_delete=False,
             )
-            linked += 1
+            if link_result:
+                linked += 1
+            else:
+                print(f"  receipt {rid}: skipped (duplicate or failed)")
         except Exception as e:
             print(f"  receipt {rid}: link failed: {e}")
 

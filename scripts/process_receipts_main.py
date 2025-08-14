@@ -8,6 +8,7 @@ import os
 import sys
 import json
 from datetime import datetime
+import uuid
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
@@ -18,8 +19,10 @@ from config_loader import load_linking_config
 from filebox_client import FileBoxClient
 from ocr_models import ReceiptRecord
 from linker import find_best_target, normalize_targets, ensure_not_duplicated_and_link, decide_action
-from slack_notifier import SlackInteractiveNotifier, ReceiptNotification, send_batch_summary
+from slack_notifier import SlackInteractiveNotifier, ReceiptNotification, send_batch_summary, send_confirmation_batch
 from state_store import put_pending
+from execution_lock import ExecutionLock, NotificationDeduplicator
+from ai_ocr_enhancer import AIReceiptEnhancer
 
 def send_slack_notification(webhook_url: str, message: dict):
     """Slackに通知を送信"""
@@ -134,8 +137,23 @@ class FreeeClient:
         url = f"{self.base_url}/wallet_txns/{tx_id}/receipts/{receipt_id}"
         params = {"company_id": self.company_id}
         
-        response = requests.put(url, headers=self.get_headers(), params=params)
-        return response.json() if response.status_code in (200, 201) else None
+        print(f"    🔗 freee API紐付け実行: wallet_txn_id={tx_id}, receipt_id={receipt_id}")
+        print(f"       URL: {url}")
+        
+        try:
+            response = requests.put(url, headers=self.get_headers(), params=params)
+            
+            if response.status_code in (200, 201):
+                print(f"    ✅ 紐付け成功: ステータス{response.status_code}")
+                return response.json()
+            else:
+                print(f"    ❌ 紐付け失敗: ステータス{response.status_code}")
+                print(f"       レスポンス: {response.text[:500]}")
+                return None
+                
+        except Exception as e:
+            print(f"    ❌ 紐付けエラー: {e}")
+            return None
     
     def attach_receipt_to_deal(self, deal_id: int, receipt_id: int):
         """レシートを取引に紐付け"""
@@ -149,10 +167,44 @@ def main():
     print("=== レシート紐付け処理を開始 ===")
     print(f"実行時刻: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
+    # プロセスID生成
+    process_id = f"receipt_processing_{uuid.uuid4().hex[:8]}"
+    print(f"🆔 プロセスID: {process_id}")
+    
+    # 実行ロック確認
+    lock = ExecutionLock("receipt_processing")
+    
+    metadata = {
+        "operation": "receipt_processing",
+        "process_id": process_id,
+        "dry_run": os.getenv("DRY_RUN", "false").lower() == "true",
+        "receipt_limit": int(os.getenv("RECEIPT_LIMIT", "50"))
+    }
+    
+    # ロック取得試行
+    if not lock.acquire_lock(process_id, metadata):
+        print("⚠️ 他のプロセスが実行中のため終了します")
+        existing_info = lock.get_lock_info()
+        if existing_info:
+            print(f"  実行中プロセス: {existing_info.get('process_id')}")
+            print(f"  開始時刻: {existing_info.get('timestamp')}")
+        return
+    
+    try:
+        _execute_main_process(process_id, lock)
+    finally:
+        # 必ずロックを解除
+        lock.release_lock(process_id)
+
+def _execute_main_process(process_id: str, lock: ExecutionLock):
+    """メイン処理の実行（ロック取得後）"""
+    
     # 環境変数取得
     dry_run = os.getenv("DRY_RUN", "false").lower() == "true"
     receipt_limit = int(os.getenv("RECEIPT_LIMIT", "50"))
     target_type = os.getenv("TARGET_TYPE", "both")
+    
+    print(f"🔧 実行設定: DRY_RUN={dry_run}, LIMIT={receipt_limit}, TYPE={target_type}")
     
     if dry_run:
         print("⚠️ DRY_RUNモード: 実際の紐付けは行いません")
@@ -178,10 +230,18 @@ def main():
     # 設定読み込み
     linking_cfg = load_linking_config()
     
+    # AI OCR改善機能の初期化
+    ai_enhancer = AIReceiptEnhancer()
+    ocr_enhancement_enabled = os.getenv("ENABLE_AI_OCR_ENHANCEMENT", "false").lower() == "true"
+    print(f"🤖 AI OCR改善: {'有効' if ocr_enhancement_enabled else '無効'}")
+    
     # Slack通知準備
     slack_url = os.getenv("SLACK_WEBHOOK_URL")
     slack_notifier = SlackInteractiveNotifier()
     assist_notifications = []
+    deduplicator = NotificationDeduplicator()
+    
+    print(f"📨 Slack設定: {'Webhook設定済み' if slack_url and 'YOUR/WEBHOOK' not in slack_url else 'Webhook未設定'}")
     
     # ファイルボックスからレシート取得
     print("\n📎 ファイルボックスからレシート取得中...")
@@ -345,21 +405,64 @@ def main():
             if not vendor:
                 vendor = f"レシート#{receipt_id}"
                 
-            # 金額が0円の場合の警告
+            # 金額が0円の場合の警告とAI改善
             if amount == 0 and i == 1:
                 print("  ⚠️ 金額情報が取得できませんでした。freee管理画面で証憑のOCR処理が完了しているか確認してください。")
+                if ocr_enhancement_enabled:
+                    print("  🤖 AI OCR改善機能が有効です - 後で改善処理を実行します")
             
-            # レシートレコード作成
+            # AI OCR改善処理（条件に応じて）
+            enhanced_vendor = vendor
+            enhanced_amount = amount
+            ai_confidence = 0.0
+            
+            if ocr_enhancement_enabled and (amount == 0 or vendor.startswith('レシート#')):
+                print(f"  🤖 AI OCR改善実行中...")
+                try:
+                    # レシート情報を準備
+                    enhancement_data = {
+                        'id': receipt_id,
+                        'ocr_vendor': vendor,
+                        'amount': amount,
+                        'file_name': file_name,
+                        'memo': memo,
+                        'description': description,
+                        'user_name': user_name
+                    }
+                    
+                    # AI改善実行（画像データも渡せるが現在はテキストベース）
+                    enhanced_result = ai_enhancer.enhance_receipt_with_ai(enhancement_data, None)
+                    
+                    if enhanced_result.confidence_score > 0.5:
+                        enhanced_vendor = enhanced_result.enhanced_vendor
+                        enhanced_amount = enhanced_result.enhanced_amount
+                        ai_confidence = enhanced_result.confidence_score
+                        
+                        print(f"  ✅ AI改善成功 (信頼度: {ai_confidence:.2f})")
+                        print(f"    vendor: '{vendor}' → '{enhanced_vendor}'")
+                        if enhanced_amount != amount:
+                            print(f"    amount: ¥{amount:,} → ¥{enhanced_amount:,}")
+                    else:
+                        print(f"  ⚠️ AI改善限定的 (信頼度: {enhanced_result.confidence_score:.2f})")
+                        
+                except Exception as e:
+                    print(f"  ❌ AI改善エラー: {e}")
+            
+            # レシートレコード作成（改善データを使用）
             rec = ReceiptRecord(
                 receipt_id=receipt_id,
                 file_hash=file_sha1,
-                vendor=vendor,
+                vendor=enhanced_vendor,
                 date=date_obj.date(),
-                amount=amount
+                amount=enhanced_amount
             )
             
             print(f"  🏪 店舗: {rec.vendor[:30] if rec.vendor else 'N/A'}")
+            if ai_confidence > 0.5:
+                print(f"    🤖 AI改善: {vendor[:20]} → {enhanced_vendor[:20]} (信頼度: {ai_confidence:.2f})")
             print(f"  💰 金額: ¥{rec.amount:,}")
+            if enhanced_amount != amount and enhanced_amount > 0:
+                print(f"    🤖 AI改善: ¥{amount:,} → ¥{enhanced_amount:,}")
             print(f"  📅 日付: {rec.date}")
             print(f"  🆔 ID: {receipt_id}, SHA1: {file_sha1[:8]}...")
             
@@ -393,7 +496,7 @@ def main():
             
             if action == "AUTO":
                 # 自動紐付け
-                ensure_not_duplicated_and_link(
+                link_result = ensure_not_duplicated_and_link(
                     freee_client,
                     rec,
                     file_sha1,
@@ -402,14 +505,24 @@ def main():
                     target_type=best.get("type", "wallet_txn"),
                     allow_delete=False
                 )
-                print("  ✅ 自動紐付け完了")
-                results["auto"] += 1
+                if link_result:
+                    print("  ✅ 自動紐付け完了")
+                    results["auto"] += 1
+                else:
+                    print("  ⚠️ 紐付けスキップ（重複または失敗）")
+                    results["manual"] += 1  # 手動対応に分類
                 
             elif action == "ASSIST":
-                # Slackインタラクティブ確認通知
+                # 確認待ちリストに追加（後でまとめてSlack通知）
                 try:
-                    # OCR品質スコアの設定
-                    ocr_quality = best.get("ocr_quality_score", 0.8)
+                    # OCR品質スコアの設定（AI改善を考慮）
+                    base_ocr_quality = best.get("ocr_quality_score", 0.8)
+                    if ai_confidence > 0.5:
+                        # AI改善によってOCR品質を向上
+                        ocr_quality = min(1.0, base_ocr_quality + (ai_confidence * 0.3))
+                        print(f"    🤖 OCR品質向上: {base_ocr_quality:.2f} → {ocr_quality:.2f}")
+                    else:
+                        ocr_quality = base_ocr_quality
                     
                     # ReceiptNotificationを作成
                     notification = ReceiptNotification(
@@ -425,34 +538,26 @@ def main():
                         ocr_quality=ocr_quality
                     )
                     
-                    # Slackインタラクティブメッセージ送信
-                    message_ts = slack_notifier.send_receipt_confirmation(notification)
+                    # pending情報を保存
+                    interaction_id = f"receipt_{notification.receipt_id}"
+                    put_pending(
+                        interaction_id=interaction_id,
+                        receipt_id=notification.receipt_id,
+                        tx_id=notification.candidate_tx_id,
+                        candidate_data={
+                            "description": notification.candidate_description,
+                            "amount": notification.candidate_amount,
+                            "score": notification.score,
+                            "reasons": notification.reasons
+                        }
+                    )
                     
-                    if message_ts:
-                        print("  📨 Slackインタラクティブ通知送信完了")
-                        
-                        # pending情報を保存
-                        interaction_id = f"receipt_{notification.receipt_id}_{message_ts}"
-                        put_pending(
-                            interaction_id=interaction_id,
-                            receipt_id=notification.receipt_id,
-                            tx_id=notification.candidate_tx_id,
-                            candidate_data={
-                                "description": notification.candidate_description,
-                                "amount": notification.candidate_amount,
-                                "score": notification.score,
-                                "reasons": notification.reasons
-                            }
-                        )
-                        
-                        assist_notifications.append(notification)
-                        results["assist"] += 1
-                    else:
-                        print("  ⚠️ Slack通知失敗 - 手動対応に変更")
-                        results["manual"] += 1
+                    assist_notifications.append(notification)
+                    results["assist"] += 1
+                    print(f"  🔍 確認待ちリストに追加")
                         
                 except Exception as e:
-                    print(f"  ❌ Slack通知エラー: {e}")
+                    print(f"  ❌ 確認待ち処理エラー: {e}")
                     results["manual"] += 1
                     
             else:
@@ -481,6 +586,28 @@ def main():
             "results": results,
             "processed_receipts": len(receipts)
         }, f, ensure_ascii=False, indent=2)
+    
+    # Slack確認待ち詳細通知（まとめて1通）- 重複防止付き
+    if assist_notifications and slack_url and not dry_run:
+        print(f"\n📨 Slack確認待ち通知準備: {len(assist_notifications)}件")
+        
+        # 重複チェック
+        should_send, batch_hash = deduplicator.should_send_notification(assist_notifications)
+        
+        if should_send:
+            print(f"📤 バッチ通知送信中: {batch_hash}")
+            try:
+                send_confirmation_batch(assist_notifications, slack_url)
+                deduplicator.record_notification_sent(assist_notifications, batch_hash)
+                print(f"✅ バッチ通知送信完了: {batch_hash}")
+            except Exception as e:
+                print(f"❌ バッチ通知送信エラー: {e}")
+        else:
+            print(f"🔄 重複通知のため送信スキップ: {batch_hash}")
+    elif assist_notifications and not slack_url:
+        print(f"⚠️ Slack URL未設定のため通知スキップ: {len(assist_notifications)}件")
+    elif not assist_notifications:
+        print("📭 確認待ち通知なし")
     
     # Slackサマリー通知
     if slack_url and not dry_run:
