@@ -18,6 +18,8 @@ from config_loader import load_linking_config
 from filebox_client import FileBoxClient
 from ocr_models import ReceiptRecord
 from linker import find_best_target, normalize_targets, ensure_not_duplicated_and_link, decide_action
+from slack_notifier import SlackInteractiveNotifier, ReceiptNotification, send_batch_summary
+from state_store import put_pending
 
 def send_slack_notification(webhook_url: str, message: dict):
     """Slackに通知を送信"""
@@ -178,6 +180,8 @@ def main():
     
     # Slack通知準備
     slack_url = os.getenv("SLACK_WEBHOOK_URL")
+    slack_notifier = SlackInteractiveNotifier()
+    assist_notifications = []
     
     # ファイルボックスからレシート取得
     print("\n📎 ファイルボックスからレシート取得中...")
@@ -374,9 +378,12 @@ def main():
                 continue
             
             score = best.get("score", 0)
-            action = decide_action(score, linking_cfg)
+            ocr_quality_score = best.get("ocr_quality_score")
+            action = decide_action(score, linking_cfg, ocr_quality_score)
             
             print(f"  マッチング: スコア {score}点 → {action}")
+            if ocr_quality_score is not None:
+                print(f"  OCR品質: {ocr_quality_score:.2f} ({'高品質' if ocr_quality_score >= 0.7 else '低品質'})")
             print(f"  対象取引: ID={best.get('id')}, 金額=¥{best.get('amount', 0):,}")
             
             if dry_run:
@@ -399,12 +406,53 @@ def main():
                 results["auto"] += 1
                 
             elif action == "ASSIST":
-                # Slack確認
-                if slack_url:
-                    print("  📨 Slack確認通知を送信")
-                    # TODO: インタラクティブメッセージ実装
-                    results["assist"] += 1
-                else:
+                # Slackインタラクティブ確認通知
+                try:
+                    # OCR品質スコアの設定
+                    ocr_quality = best.get("ocr_quality_score", 0.8)
+                    
+                    # ReceiptNotificationを作成
+                    notification = ReceiptNotification(
+                        receipt_id=receipt_id,
+                        vendor=rec.vendor,
+                        amount=rec.amount,
+                        date=rec.date.strftime('%Y-%m-%d'),
+                        candidate_tx_id=str(best.get('id')),
+                        candidate_description=best.get('description', 'No description'),
+                        candidate_amount=best.get('amount', 0),
+                        score=score,
+                        reasons=best.get('reasons', []),
+                        ocr_quality=ocr_quality
+                    )
+                    
+                    # Slackインタラクティブメッセージ送信
+                    message_ts = slack_notifier.send_receipt_confirmation(notification)
+                    
+                    if message_ts:
+                        print("  📨 Slackインタラクティブ通知送信完了")
+                        
+                        # pending情報を保存
+                        interaction_id = f"receipt_{notification.receipt_id}_{message_ts}"
+                        put_pending(
+                            interaction_id=interaction_id,
+                            receipt_id=notification.receipt_id,
+                            tx_id=notification.candidate_tx_id,
+                            candidate_data={
+                                "description": notification.candidate_description,
+                                "amount": notification.candidate_amount,
+                                "score": notification.score,
+                                "reasons": notification.reasons
+                            }
+                        )
+                        
+                        assist_notifications.append(notification)
+                        results["assist"] += 1
+                    else:
+                        print("  ⚠️ Slack通知失敗 - 手動対応に変更")
+                        results["manual"] += 1
+                        
+                except Exception as e:
+                    print(f"  ❌ Slack通知エラー: {e}")
                     results["manual"] += 1
                     
             else:
@@ -434,29 +482,9 @@ def main():
             "processed_receipts": len(receipts)
         }, f, ensure_ascii=False, indent=2)
     
-    # Slack通知
+    # Slackサマリー通知
     if slack_url and not dry_run:
-        send_slack_notification(slack_url, {
-            "text": f"📎 レシート紐付け完了",
-            "blocks": [
-                {
-                    "type": "section",
-                    "text": {
-                        "type": "mrkdwn",
-                        "text": f"*レシート紐付け処理完了*\n処理件数: {len(receipts)}件"
-                    }
-                },
-                {
-                    "type": "section",
-                    "fields": [
-                        {"type": "mrkdwn", "text": f"*自動紐付け:* {results['auto']}件"},
-                        {"type": "mrkdwn", "text": f"*確認待ち:* {results['assist']}件"},
-                        {"type": "mrkdwn", "text": f"*手動対応:* {results['manual']}件"},
-                        {"type": "mrkdwn", "text": f"*エラー:* {results['error']}件"}
-                    ]
-                }
-            ]
-        })
+        send_batch_summary(results, len(receipts), slack_url)
     
     print("\n✅ レシート紐付け処理完了")
 

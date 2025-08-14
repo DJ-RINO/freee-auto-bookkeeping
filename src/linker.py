@@ -17,8 +17,19 @@ def _receipt_hash(rec: ReceiptRecord, file_digest_hex: str) -> str:
     return hashlib.sha1(base.encode("utf-8")).hexdigest()
 
 
-def decide_action(score: int, cfg: Dict) -> str:
-    th = cfg.get("thresholds", {"auto": 85, "assist_min": 65, "assist_max": 84})
+def decide_action(score: int, cfg: Dict, ocr_quality_score: float = None) -> str:
+    """OCR品質を考慮したアクション決定"""
+    
+    # OCR品質対応の閾値使用
+    if ocr_quality_score is not None and cfg.get("ocr_adaptive_thresholds"):
+        if ocr_quality_score >= 0.7:  # 高品質OCR
+            th = cfg["ocr_adaptive_thresholds"]["high_quality"]
+        else:  # 低品質OCR
+            th = cfg["ocr_adaptive_thresholds"]["low_quality"]
+    else:
+        # 従来の閾値
+        th = cfg.get("thresholds", {"auto": 85, "assist_min": 65, "assist_max": 84})
+    
     if score >= th["auto"]:
         return "AUTO"
     if th["assist_min"] <= score <= th["assist_max"]:
@@ -148,7 +159,37 @@ def find_best_target(ocr: ReceiptRecord, targets: List[Dict], cfg: Dict) -> Opti
     print(f"  [マッチング] レシート: {ocr.vendor[:20]} / ¥{ocr.amount:,} / {ocr.date}")
     print(f"  [マッチング] 対象取引: {len(targets)}件")
 
-    candidates = match_candidates(ocr, targets, cfg)
+    # OCR品質チェックと適応的マッチング
+    try:
+        from enhanced_matcher import EnhancedMatcher
+        from ocr_quality_manager import OCRQualityManager
+        
+        ocr_manager = OCRQualityManager()
+        receipt_data = {
+            'id': ocr.receipt_id,
+            'ocr_vendor': ocr.vendor,
+            'amount': ocr.amount,
+            'date': ocr.date.isoformat() if ocr.date else None
+        }
+        
+        ocr_quality = ocr_manager.check_ocr_quality(receipt_data)
+        
+        # OCR品質が低い場合は強化マッチャーを使用
+        if ocr_quality.completion_score < 0.7 or ocr.amount == 0:
+            print(f"  🔧 OCR品質低下検出 (score={ocr_quality.completion_score:.2f}) - 強化マッチャー使用")
+            enhanced_matcher = EnhancedMatcher()
+            candidates = enhanced_matcher.match_with_ocr_awareness(ocr, targets, cfg)
+        else:
+            print(f"  ✅ OCR品質良好 (score={ocr_quality.completion_score:.2f}) - 標準マッチャー使用")
+            candidates = match_candidates(ocr, targets, cfg)
+        
+        # OCR品質スコアを保存
+        quality_score = ocr_quality.completion_score
+            
+    except ImportError as e:
+        print(f"  ⚠️ 強化マッチャー利用不可、標準マッチャーを使用: {e}")
+        candidates = match_candidates(ocr, targets, cfg)
+        quality_score = None
     
     if candidates:
         best = candidates[0]
@@ -168,6 +209,9 @@ def find_best_target(ocr: ReceiptRecord, targets: List[Dict], cfg: Dict) -> Opti
         # bestにIDを確実に含める
         if 'id' not in best and 'tx_id' in best:
             best['id'] = best['tx_id']
+        
+        # OCR品質スコアを追加
+        best['ocr_quality_score'] = quality_score
         
         return best
     else:

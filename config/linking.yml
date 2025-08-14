@@ -1,12 +1,34 @@
 # Receipt linking configuration
 thresholds:
-  auto: 70        # 実用的な閾値に調整（学習システム適用後）
-  assist_min: 50  # 人間の判断が必要な範囲
-  assist_max: 69
+  auto: 50        # より積極的な自動承認（確認待ちを自動化）
+  assist_min: 30  # より多くを確認待ちに
+  assist_max: 49
+
+# OCR品質対応の閾値調整
+ocr_adaptive_thresholds:
+  high_quality:     # OCR品質が良好な場合
+    auto: 50        # 基準値と統一
+    assist_min: 30
+    assist_max: 49
+  low_quality:      # OCR品質が低い場合（金額0円、vendor名不正確等）
+    auto: 35        # さらに低い閾値で自動承認
+    assist_min: 20  # より広範囲でアシスト
+    assist_max: 34
 
 tolerances:
-  amount_jpy: 1000  # ¥1000または5%の大きい方（matcher.pyに合わせる）
-  days: 45          # 1.5ヶ月の許容範囲
+  amount_jpy: 3000  # より緩い金額許容範囲
+  days: 90          # より長い日付許容範囲（3ヶ月）
+  
+# OCR品質対応の許容範囲
+ocr_adaptive_tolerances:
+  high_quality:
+    amount_percent: 0.10    # 10%（より緩く）
+    amount_min: 3000       # 基準値と統一
+    days: 90               # 基準値と統一
+  low_quality:
+    amount_percent: 0.25   # 25%（さらに緩く）
+    amount_min: 5000       # より大きい許容範囲
+    days: 120              # 4ヶ月（さらに長く）
 
 weights:
   amount: 0.5     # 金額の重要度を上げる

@@ -48,7 +48,9 @@ def init_db():
             CREATE TABLE IF NOT EXISTS pending (
               interaction_id TEXT PRIMARY KEY,
               receipt_id TEXT,
+              tx_id TEXT,
               candidates_json TEXT,
+              candidate_data TEXT,
               expire_at TEXT
             );
             """
@@ -84,25 +86,34 @@ def mark_linked(receipt_hash: str, meta: Dict):
         )
 
 
-def put_pending(interaction_id: str, receipt_id: str, candidates: list, ttl_minutes: int = 120):
+def put_pending(interaction_id: str, receipt_id: str, tx_id: str = None, candidates: list = None, candidate_data: dict = None, ttl_minutes: int = 120):
     with _conn() as con:
         expire_at = (datetime.utcnow() + timedelta(minutes=ttl_minutes)).isoformat()
         con.execute(
-            "INSERT OR REPLACE INTO pending(interaction_id, receipt_id, candidates_json, expire_at) VALUES (?,?,?,?)",
-            (interaction_id, receipt_id, json.dumps(candidates, ensure_ascii=False), expire_at),
+            "INSERT OR REPLACE INTO pending(interaction_id, receipt_id, tx_id, candidates_json, candidate_data, expire_at) VALUES (?,?,?,?,?,?)",
+            (
+                interaction_id, 
+                receipt_id, 
+                tx_id,
+                json.dumps(candidates or [], ensure_ascii=False), 
+                json.dumps(candidate_data or {}, ensure_ascii=False),
+                expire_at
+            ),
         )
 
 
 def get_pending(interaction_id: str) -> Optional[Dict]:
     with _conn() as con:
-        cur = con.execute("SELECT receipt_id, candidates_json, expire_at FROM pending WHERE interaction_id=?", (interaction_id,))
+        cur = con.execute("SELECT receipt_id, tx_id, candidates_json, candidate_data, expire_at FROM pending WHERE interaction_id=?", (interaction_id,))
         row = cur.fetchone()
         if not row:
             return None
-        receipt_id, candidates_json, expire_at = row
+        receipt_id, tx_id, candidates_json, candidate_data, expire_at = row
         return {
             "receipt_id": receipt_id,
-            "candidates": json.loads(candidates_json),
+            "tx_id": tx_id,
+            "candidates": json.loads(candidates_json or "[]"),
+            "candidate_data": json.loads(candidate_data or "{}"),
             "expire_at": expire_at,
         }
 
