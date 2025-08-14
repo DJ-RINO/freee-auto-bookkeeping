@@ -12,6 +12,19 @@ from datetime import datetime
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 
+# 承認学習システムをインポート（エラーハンドリング付き）
+try:
+    from approval_learner import ApprovalLearner, ApprovalRecord
+except ImportError:
+    # フォールバック: 依存関係が見つからない場合はダミークラスを使用
+    class ApprovalLearner:
+        def __init__(self): pass
+        def record_approval(self, *args, **kwargs): pass
+        def get_confidence(self, *args, **kwargs): return 0.5
+    
+    class ApprovalRecord:
+        def __init__(self, *args, **kwargs): pass
+
 @dataclass
 class ReceiptNotification:
     """レシート通知データ"""
@@ -33,6 +46,7 @@ class SlackInteractiveNotifier:
         self.bot_token = os.getenv("SLACK_BOT_TOKEN")
         self.channel_id = os.getenv("SLACK_CHANNEL_ID", "#general")
         self.webhook_url = os.getenv("SLACK_WEBHOOK_URL")
+        self.approval_learner = ApprovalLearner()
         
     def send_receipt_confirmation(self, notification: ReceiptNotification) -> Optional[str]:
         """レシート確認のインタラクティブメッセージを送信"""
@@ -267,6 +281,169 @@ ID: {notification.receipt_id}
         """.strip()
         
         return message
+    
+    def record_user_approval(self, notification: ReceiptNotification, 
+                           user_action: str, 
+                           user_selected_target_id: str = None,
+                           user_selected_target_desc: str = None,
+                           user_feedback: str = None) -> None:
+        """ユーザーの承認アクションを記録"""
+        
+        approval_record = ApprovalRecord(
+            timestamp=datetime.now(),
+            receipt_id=notification.receipt_id,
+            receipt_vendor=notification.vendor,
+            receipt_amount=float(notification.amount),
+            receipt_date=notification.date,
+            
+            suggested_target_id=notification.candidate_tx_id,
+            suggested_target_desc=notification.candidate_description,
+            suggested_score=float(notification.score),
+            suggested_action="ASSIST",  # 通知が送られたということは確認待ち
+            
+            user_action=user_action,
+            user_selected_target_id=user_selected_target_id,
+            user_selected_target_desc=user_selected_target_desc,
+            user_feedback=user_feedback
+        )
+        
+        self.approval_learner.record_approval(approval_record)
+        print(f"📚 承認データを記録: {notification.receipt_id} -> {user_action}")
+    
+    def simulate_user_approvals(self, notifications: List[ReceiptNotification]) -> None:
+        """テスト用：ユーザー承認をシミュレート"""
+        
+        import random
+        
+        for notification in notifications:
+            # ランダムにユーザーアクションをシミュレート
+            if notification.score >= 80:
+                # 高スコアは承認される確率が高い
+                action = random.choices(
+                    ["approved", "rejected", "modified"],
+                    weights=[80, 10, 10]
+                )[0]
+            elif notification.score >= 60:
+                # 中スコアは半々
+                action = random.choices(
+                    ["approved", "rejected", "modified"],
+                    weights=[50, 30, 20]
+                )[0]
+            else:
+                # 低スコアは拒否される確率が高い
+                action = random.choices(
+                    ["approved", "rejected", "modified"],
+                    weights=[20, 60, 20]
+                )[0]
+            
+            # 修正の場合は適当なターゲットを設定
+            if action == "modified":
+                self.record_user_approval(
+                    notification, action,
+                    user_selected_target_id=f"modified_{notification.candidate_tx_id}",
+                    user_selected_target_desc=f"修正後-{notification.candidate_description}",
+                    user_feedback="手動で修正しました"
+                )
+            else:
+                self.record_user_approval(notification, action)
+            
+            print(f"  💬 {notification.vendor[:15]} -> {action} (スコア:{notification.score})")
+
+def send_confirmation_batch(notifications: List[ReceiptNotification], webhook_url: str = None):
+    """確認待ちレシートの詳細をまとめて1通でSlackに送信"""
+    
+    webhook_url = webhook_url or os.getenv("SLACK_WEBHOOK_URL")
+    if not webhook_url or "YOUR/WEBHOOK/URL" in webhook_url or "XXXXXX" in webhook_url:
+        print("⚠️ Slack Webhook URL未設定 - モック確認待ち通知で処理継続")
+        print(f"📋 確認待ちレシート: {len(notifications)}件")
+        for notification in notifications:
+            print(f"  • {notification.vendor[:20]} ¥{notification.amount:,} (スコア:{notification.score})")
+        return
+    
+    if not notifications:
+        return
+    
+    # ヘッダー部分
+    count = len(notifications)
+    message_parts = [
+        f"🔍 *freee証憑確認が必要です* ({count}件)",
+        "",
+        "以下のレシートについて、freee管理画面での手動確認をお願いします。",
+        ""
+    ]
+    
+    # 各レシートの詳細
+    for i, notification in enumerate(notifications, 1):
+        amount_diff = abs(notification.amount - abs(notification.candidate_amount))
+        quality_text = "高品質" if notification.ocr_quality >= 0.8 else "中品質" if notification.ocr_quality >= 0.5 else "低品質"
+        
+        # スコア表示の改良
+        score_emoji = "🟢" if notification.score >= 70 else "🟡" if notification.score >= 50 else "🔴"
+        
+        # 金額差の状況
+        amount_status = "✅ 一致" if amount_diff <= 1000 else f"⚠️ 差額¥{amount_diff:,}"
+        
+        # OCR品質の詳細表示
+        ocr_emoji = "🟢" if notification.ocr_quality >= 0.8 else "🟡" if notification.ocr_quality >= 0.5 else "🔴"
+        ocr_detail = f"{ocr_emoji} {quality_text}({notification.ocr_quality:.2f})"
+        
+        # マッチング理由の要約
+        key_reasons = []
+        for reason in notification.reasons[:3]:  # 主要な理由のみ
+            if "amount≈" in reason:
+                key_reasons.append("💰金額一致")
+            elif "date≈" in reason:
+                key_reasons.append("📅日付一致")
+            elif "name~" in reason:
+                score_match = reason.split("~")[1] if "~" in reason else ""
+                key_reasons.append(f"🏪名前類似({score_match})")
+            elif "amount_diff" in reason:
+                key_reasons.append("💰金額差大")
+            elif "date_diff" in reason:
+                key_reasons.append("📅日付差大")
+        
+        reason_text = " | ".join(key_reasons) if key_reasons else "理由不明"
+        
+        receipt_section = [
+            f"*{i}. {notification.vendor}*",
+            f"   💰 レシート: ¥{notification.amount:,} | 📅 {notification.date}",
+            f"   🎯 紐付け候補: {notification.candidate_description[:40]}...",
+            f"   💰 候補金額: ¥{abs(notification.candidate_amount):,} ({amount_status})",
+            f"   📊 {score_emoji} マッチスコア: {notification.score}点",
+            f"   🔍 判定理由: {reason_text}",
+            f"   📋 OCR品質: {ocr_detail} | ID: {notification.receipt_id}",
+            ""
+        ]
+        message_parts.extend(receipt_section)
+    
+    # フッター部分
+    message_parts.extend([
+        "📱 *次のアクション:*",
+        "1. freee管理画面にアクセス",
+        "2. 「ファイルボックス」→「証憑」を確認",
+        "3. 上記のレシートを手動で取引に紐付け",
+        "",
+        f"合計 {count}件の確認をお願いします。"
+    ])
+    
+    message = "\n".join(message_parts)
+    
+    payload = {
+        "text": f"freee証憑確認が必要です ({count}件)",
+        "attachments": [{
+            "color": "warning",
+            "text": message,
+            "mrkdwn_in": ["text"]
+        }]
+    }
+    
+    try:
+        response = requests.post(webhook_url, json=payload)
+        response.raise_for_status()
+        print(f"✅ Slack確認待ち詳細通知送信成功 ({count}件)")
+        
+    except Exception as e:
+        print(f"❌ Slack確認待ち通知送信エラー: {e}")
 
 def send_batch_summary(results: Dict, total_processed: int, webhook_url: str = None):
     """処理結果のサマリーをSlackに送信"""
