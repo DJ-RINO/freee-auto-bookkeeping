@@ -1,9 +1,6 @@
 name: Receipt Linking
 
 on:
-  schedule:
-    # 毎日午前10時（JST）に実行
-    - cron: '0 1 * * *'  # UTC 01:00 = JST 10:00
   workflow_dispatch:
     inputs:
       dry_run:

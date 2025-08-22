@@ -1,9 +1,6 @@
 name: Auto Bookkeeping
 
 on:
-  schedule:
-    # 毎週月曜日の午前9時（JST）に実行
-    - cron: '0 0 * * 1'  # UTC 00:00 = JST 09:00
   workflow_dispatch:
     inputs:
       dry_run:
